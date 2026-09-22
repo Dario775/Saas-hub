@@ -31,7 +31,8 @@ Reglas:
 4. Proponer un gancho claro sobre cómo ${brandName} ${valueProposition ? `(${valueProposition})` : 'ayuda a digitalizar, facturar y multiplicar sus clientes'} sin complicaciones.
 5. Llamado a la acción (CTA) directo: pedir 5 minutos para una demo rápida sin compromiso.
 6. Devuelve únicamente el texto del mensaje, sin comillas ni encabezados adicionales.
-7. No inventes datos que no figuren en la ficha del negocio (puntuaciones, reseñas, horarios, cantidad de clientes): si un dato no está, omítelo.`;
+7. No inventes datos que no figuren en la ficha del negocio (puntuaciones, reseñas, horarios, cantidad de clientes): si un dato no está, omítelo.
+8. Nunca afirmes que al negocio le falta algo (por ejemplo que "no tiene sitio web"): si el dato no figura en la ficha, simplemente no lo menciones.`;
 
     const userPrompt = `Negocio: ${lead.nombre}
 Rubro: ${lead.rubro}

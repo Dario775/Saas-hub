@@ -111,7 +111,8 @@ export async function queryLLM(
   systemPrompt: string,
   userPrompt: string,
   settings?: LLMSettings,
-  expectJson: boolean = true
+  expectJson: boolean = true,
+  options: { timeoutMs?: number } = {},
 ): Promise<string> {
   // Combinar settings personalizadas con variables de entorno de fallback
   const provider: LLMProvider =
@@ -255,6 +256,7 @@ export async function queryLLM(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
     });
   } catch (fetchErr: any) {
     console.error(`[LLM Request] Error de conexión física (fetch falló):`, fetchErr);

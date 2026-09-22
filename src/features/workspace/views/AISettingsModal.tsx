@@ -31,6 +31,8 @@ export default function AISettingsModal({
     setDeepseekApiKey,
     deepseekModel,
     setDeepseekModel,
+    jevApiKey,
+    setJevApiKey,
     openaiApiKey,
     setOpenaiApiKey,
     handleSaveLlmSettings,
@@ -293,6 +295,28 @@ export default function AISettingsModal({
               )}
             </div>
 
+            <div className="space-y-2 border-t border-white/[0.06] pt-4">
+              <Label
+                htmlFor="jev-key"
+                className="text-[10px] font-bold text-slate-500 uppercase tracking-wider"
+              >
+                API Key de Jev (motor de decisión)
+              </Label>
+              <Input
+                id="jev-key"
+                type="password"
+                placeholder="opcional"
+                value={jevApiKey}
+                onChange={(e) => setJevApiKey(e.target.value)}
+                className="bg-white/[0.02] border-white/[0.08] focus:border-purple-550/40 focus:ring-purple-500/30 text-slate-100 placeholder:text-slate-650 rounded-xl text-xs py-5"
+              />
+              <p className="text-[10px] text-slate-500">
+                Se guarda en el servidor y nunca vuelve al navegador. Sin esta
+                clave, el análisis de oportunidad sigue funcionando solo con
+                DeepSeek.
+              </p>
+            </div>
+
             <div className="flex items-center gap-3 justify-end pt-4 border-t border-white/[0.06]">
               <Button
                 variant="ghost"
@@ -314,6 +338,7 @@ export default function AISettingsModal({
                     openaiApiKey,
                     deepseekApiKey,
                     deepseekModel,
+                    jevApiKey,
                   );
                 }}
                 className="bg-purple-600 hover:bg-purple-550 text-white rounded-xl px-5 shadow-[0_0_20px_rgba(168,85,247,0.2)] border border-purple-500/20 text-xs py-4.5"

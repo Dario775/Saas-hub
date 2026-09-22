@@ -316,6 +316,8 @@ export function useWorkspace() {
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
   const [deepseekModel, setDeepseekModel] = useState("deepseek-flash");
   const [deepseekEnvKeySet, setDeepseekEnvKeySet] = useState<boolean>(false);
+  const [jevApiKey, setJevApiKey] = useState("");
+  const [jevEnvKeySet, setJevEnvKeySet] = useState<boolean>(false);
   const [showLlmModal, setShowLlmModal] = useState(false);
   const [showImageLightbox, setShowImageLightbox] = useState(false);
 
@@ -372,6 +374,7 @@ export function useWorkspace() {
         setOpenaiEnvKeySet(Boolean(settings.openaiApiKeyConfigured));
         setGeminiEnvKeySet(Boolean(settings.geminiApiKeyConfigured));
         setDeepseekEnvKeySet(Boolean(settings.deepseekKeyConfigured));
+        setJevEnvKeySet(Boolean(settings.jevKeyConfigured));
       } catch {
         toast.error("No se pudo cargar la configuración de IA.");
       }
@@ -479,6 +482,7 @@ export function useWorkspace() {
     oKey: string,
     dKey: string,
     dModel: string,
+    jKey: string,
   ) {
     setLlmProvider(provider);
     setOpenrouterKey(key);
@@ -490,6 +494,7 @@ export function useWorkspace() {
     setOpenaiApiKey(oKey);
     setDeepseekApiKey(dKey);
     setDeepseekModel(dModel);
+    setJevApiKey(jKey);
 
     try {
       const response = await fetch("/api/settings", {
@@ -506,6 +511,7 @@ export function useWorkspace() {
           openaiApiKey: oKey,
           deepseekKey: dKey,
           deepseekModel: dModel,
+          jevKey: jKey,
         }),
       });
       if (!response.ok) throw new Error((await response.json()).error);
@@ -516,6 +522,8 @@ export function useWorkspace() {
       if (oKey) setOpenaiEnvKeySet(true);
       setDeepseekApiKey("");
       if (dKey) setDeepseekEnvKeySet(true);
+      setJevApiKey("");
+      if (jKey) setJevEnvKeySet(true);
       setShowLlmModal(false);
       toast.success("Conexión guardada de forma privada en el servidor");
     } catch (error) {
@@ -1800,6 +1808,10 @@ export function useWorkspace() {
     setDeepseekModel,
     deepseekEnvKeySet,
     setDeepseekEnvKeySet,
+    jevApiKey,
+    setJevApiKey,
+    jevEnvKeySet,
+    setJevEnvKeySet,
     showLlmModal,
     setShowLlmModal,
     showImageLightbox,

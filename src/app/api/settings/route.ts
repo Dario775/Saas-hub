@@ -11,12 +11,14 @@ const fields: Record<string, string> = {
   openaiApiKey: "OPENAI_API_KEY",
   deepseekKey: "DEEPSEEK_API_KEY",
   deepseekModel: "DEEPSEEK_MODEL",
+  jevKey: "JEV_API_KEY",
 };
 const secrets = new Set([
   "openrouterKey",
   "geminiApiKey",
   "openaiApiKey",
   "deepseekKey",
+  "jevKey",
 ]);
 export async function GET() {
   const settings: Record<string, string | boolean> = {};

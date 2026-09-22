@@ -20,6 +20,7 @@ SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { LeadItem,LeadStatus } from "@/lib/leads-service";
+import type { OpportunityResult } from "@/lib/opportunity-types";
 import { LocationItem,PREDEFINED_LOCATIONS } from "@/lib/location-data";
 import {
 AlertCircle,
@@ -142,6 +143,12 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [searching, setSearching] = useState(false);
   const [scrapingEmails, setScrapingEmails] = useState(false);
+
+  // Análisis de oportunidad: acción manual, no contacta a nadie
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [analysisLead, setAnalysisLead] = useState<LeadItem | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<OpportunityResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Modo de acumulación o reemplazo de resultados
   const [searchMode, setSearchMode] = useState<"replace" | "append">("replace");
@@ -350,6 +357,36 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
       toast.error("Error de conexión durante el escaneo");
     } finally {
       setScrapingEmails(false);
+    }
+  }
+
+  async function handleAnalyzeOpportunity(lead: LeadItem) {
+    setAnalysisLead(lead);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setAnalyzingId(lead.place_id);
+    try {
+      const res = await fetch("/api/leads/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ placeId: lead.place_id }),
+      });
+      const data = await res.json();
+      if (data.lead) {
+        setLeads((prev) =>
+          prev.map((item) => (item.place_id === data.lead.place_id ? data.lead : item)),
+        );
+      }
+      if (data.result) {
+        setAnalysisResult(data.result);
+        if (data.result.error) setAnalysisError(data.result.error);
+      } else {
+        setAnalysisError(data.error || "No se pudo analizar la oportunidad.");
+      }
+    } catch {
+      setAnalysisError("Error de conexión durante el análisis.");
+    } finally {
+      setAnalyzingId(null);
     }
   }
 
@@ -1203,6 +1240,21 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
                     <Button
                       size="sm"
                       variant="ghost"
+                      onClick={() => handleAnalyzeOpportunity(lead)}
+                      disabled={analyzingId === lead.place_id}
+                      className="h-8 px-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] flex items-center gap-1 border border-emerald-500/20"
+                      title="Analizar la oportunidad comercial (no contacta a nadie)"
+                    >
+                      {analyzingId === lead.place_id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Compass className="w-3 h-3 text-emerald-400" />
+                      )}
+                      Analizar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => handleOpenPitchModal(lead)}
                       className="h-8 px-2 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 text-[11px] flex items-center gap-1 border border-purple-500/20"
                       title="Redactar o editar pitch de venta con IA"
@@ -1419,6 +1471,237 @@ ${demoUrl}
       </Dialog>
 
       {/* Modal de Limpieza de Lista / Reset CRM */}
+      {/* Análisis de oportunidad: solo analiza, nunca contacta */}
+      <Dialog
+        open={!!analysisLead}
+        onOpenChange={(open) => !open && setAnalysisLead(null)}
+      >
+        <DialogContent className="bg-[#0e0e18] border-white/10 text-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-emerald-300">
+              <Compass className="w-4 h-4 text-emerald-400" />
+              Análisis de oportunidad de {analysisLead?.nombre}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-400">
+              Solo análisis: no envía mensajes, no publica y no contacta al
+              comercio. Contactar sigue siendo una acción manual y separada.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2 max-h-[60vh] overflow-y-auto pr-1 text-xs">
+            {analyzingId && !analysisResult && (
+              <div className="py-10 text-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-400" />
+                <p className="text-slate-400">
+                  Enriqueciendo datos, clasificando y analizando la oportunidad...
+                </p>
+              </div>
+            )}
+
+            {analysisError && (
+              <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">
+                {analysisError}
+              </div>
+            )}
+
+            {analysisResult && (
+              <>
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Datos del negocio
+                  </h4>
+                  <p className="text-slate-300">
+                    {analysisResult.signals?.business.name || analysisLead?.nombre} ·{" "}
+                    {analysisResult.signals?.business.category || analysisLead?.rubro} ·{" "}
+                    {analysisResult.signals?.business.zone || analysisLead?.zona}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Contactable: {analysisResult.signals?.contactable ? "sí" : "no"} ·
+                    Sitio web:{" "}
+                    {analysisResult.signals?.website.present
+                      ? "sí"
+                      : analysisResult.signals?.website.status === "not_found"
+                        ? "no encontrado en las fuentes consultadas"
+                        : "no se buscó"}
+                  </p>
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Evidencias encontradas
+                  </h4>
+                  {analysisResult.evidence.length === 0 ? (
+                    <p className="text-slate-500">Sin evidencia registrada todavía.</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {analysisResult.evidence.map((item, index) => (
+                        <li
+                          key={item.field + "-" + item.status + "-" + index}
+                          className="flex items-start gap-2"
+                        >
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] px-1 py-0 bg-white/[0.03] border-white/10 text-slate-300 shrink-0"
+                          >
+                            {item.status}
+                          </Badge>
+                          <span className="text-slate-300">
+                            <strong className="text-slate-200">{item.field}</strong>
+                            {item.value ? ": " + String(item.value).slice(0, 70) : ""}
+                            <span className="text-slate-500">
+                              {" · "}
+                              {item.source}
+                              {item.sourceUrl
+                                ? " · " + item.sourceUrl.slice(0, 60)
+                                : ""}
+                              {" · confianza "}
+                              {item.confidence}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Fuentes consultadas
+                  </h4>
+                  <p className="text-slate-400">
+                    {(analysisResult.signals?.consultedSources || []).join(", ") ||
+                      "sin fuentes registradas"}
+                  </p>
+                  {analysisResult.enrichment.checkedUrls.length > 0 && (
+                    <p className="text-[11px] text-slate-500">
+                      URLs revisadas: {analysisResult.enrichment.checkedUrls.join(", ")}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Resultado Jev (clasificador rápido)
+                  </h4>
+                  {analysisResult.jev ? (
+                    analysisResult.jev.ok ? (
+                      <p className="text-slate-300">
+                        Ruteo:{" "}
+                        <strong className="text-emerald-300">
+                          {analysisResult.jev.routing}
+                        </strong>{" "}
+                        · modelo {analysisResult.jev.model} ·{" "}
+                        {analysisResult.jev.latencyMs} ms
+                        {analysisResult.jev.primaryGap
+                          ? " · brecha principal: " + analysisResult.jev.primaryGap.choice
+                          : ""}
+                        <br />
+                        <span className="text-[11px] text-slate-500">
+                          {analysisResult.jev.routingReason}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-amber-200">{analysisResult.jev.error}</p>
+                    )
+                  ) : (
+                    <p className="text-slate-500">
+                      Jev no se ejecutó en este análisis.
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Análisis DeepSeek
+                  </h4>
+                  {analysisResult.analysis?.ok ? (
+                    <p className="text-slate-300">
+                      Modelo {analysisResult.analysis.model} ·{" "}
+                      {analysisResult.analysis.latencyMs} ms · cobertura de evidencia{" "}
+                      {analysisResult.analysis.evidenceCoverage.supported}/
+                      {analysisResult.analysis.evidenceCoverage.total} (
+                      {analysisResult.analysis.evidenceCoverage.score})
+                      <br />
+                      <span className="text-[11px] text-slate-500">
+                        Campos citados:{" "}
+                        {analysisResult.analysis.evidenceUsed.join(", ") || "ninguno"}
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-amber-200">
+                      {analysisResult.analysis?.error || "No se ejecutó el análisis."}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Oportunidad detectada
+                  </h4>
+                  {analysisResult.analysis?.opportunityDetected ? (
+                    <p className="text-slate-300">
+                      <strong className="text-emerald-300">
+                        {analysisResult.analysis.opportunityType || "oportunidad"}
+                      </strong>
+                      {analysisResult.analysis.problemDetected
+                        ? " · " + analysisResult.analysis.problemDetected
+                        : ""}
+                    </p>
+                  ) : (
+                    <p className="text-slate-400">
+                      No se detectó una oportunidad suficientemente clara.
+                      {analysisResult.analysis?.problemDetected
+                        ? " " + analysisResult.analysis.problemDetected
+                        : ""}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Solución propuesta
+                  </h4>
+                  <p className="text-slate-300">
+                    {analysisResult.analysis?.proposedSolution || "Sin propuesta."}
+                  </p>
+                  {analysisResult.analysis?.recommendedProducts?.length ? (
+                    <p className="text-[11px] text-slate-500">
+                      Productos sugeridos:{" "}
+                      {analysisResult.analysis.recommendedProducts.join(", ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.analysis?.reasoning && (
+                    <p className="text-[11px] text-slate-500">
+                      Razonamiento: {analysisResult.analysis.reasoning}
+                    </p>
+                  )}
+                </section>
+
+                <p className="text-[10px] text-slate-600">
+                  Análisis {analysisResult.logId || "sin id"} ·{" "}
+                  {analysisResult.durationMs} ms · etapa final{" "}
+                  {analysisResult.stage}
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/[0.08]">
+            <span className="text-[10px] text-slate-500 mr-auto">
+              Analizar no es contactar: el envío sigue siendo manual.
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAnalysisLead(null)}
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              Cerrar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isClearModalOpen} onOpenChange={setIsClearModalOpen}>
         <DialogContent className="bg-[#0f0f18] border-white/10 text-white max-w-md">
           <DialogHeader>
