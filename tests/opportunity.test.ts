@@ -17,8 +17,12 @@ import type { LeadEvidence } from "../src/lib/lead-evidence";
 import { mergeLeadSearch } from "../src/lib/lead-merge";
 import {
   buildOpportunitySignals,
+  buildQuestions,
   JEV_CONFIDENCE_THRESHOLD,
   askJev,
+  mapJevUsage,
+  resolveJevConfig,
+  resolveJevEndpoint,
   routeJevDecision,
 } from "../src/lib/jev";
 import {
@@ -94,7 +98,12 @@ const jevAnswer = (
     business_verifiable: { type: "noul", noul: businessVerifiable },
     evidence_sufficient: { type: "noul", noul: 0.8 },
   },
-  usage: { input_tokens: 120, output_tokens: 12 },
+  usage: {
+    input_tokens: 120,
+    output_tokens: 12,
+    cost_usd: 0.000026,
+    credits_remaining_usd: 4.999974,
+  },
 });
 
 function memoryStore(initial: LeadItem[]): OpportunityLeadStore & { state: Map<string, LeadItem> } {
@@ -361,7 +370,7 @@ test("se parsea la respuesta oficial de Jev y se conserva el modelo", async () =
   const patched = patchFetch(() => jsonResponse(jevAnswer("yes", 0.88)));
   try {
     const decision = await askJev(buildOpportunitySignals(lead(), undefined), undefined, {
-      apiKey: "test-key",
+      apiKey: "jv_live_test_key",
     });
     assert.equal(decision.ok, true);
     assert.equal(decision.model, "jev-test-1");
@@ -369,8 +378,10 @@ test("se parsea la respuesta oficial de Jev y se conserva el modelo", async () =
     assert.equal(decision.worthDeepAnalysis?.choice, "yes");
     assert.equal(decision.primaryGap?.choice, "no_website");
     assert.equal(decision.usage?.input_tokens, 120);
+    assert.equal(decision.usage?.cost_usd, 0.000026);
+    assert.equal(decision.usage?.credits_remaining_usd, 4.999974);
     assert.ok(decision.latencyMs >= 0);
-    assert.equal(patched.calls[0], "https://api.typesafe.ai/v1/systemone");
+    assert.equal(patched.calls[0], "https://jevtypesafeai.com/api/v1/decide");
   } finally {
     patched.restore();
   }
@@ -688,3 +699,135 @@ test("las señales describen solo lo que la evidencia respalda", () => {
   assert.ok(signals.notSearched.includes("instagram"));
   assert.ok(signals.consultedSources.includes("openstreetmap"));
 });
+
+/* ------------------------------------------------------------------ */
+/* API hospedada de decisiones (/api/v1/decide)                        */
+/* ------------------------------------------------------------------ */
+
+test("las claves jv_live_ usan la API hospedada y las demas el servicio en la nube", () => {
+  assert.equal(resolveJevEndpoint("jv_live_abc"), "https://jevtypesafeai.com/api/v1/decide");
+  assert.equal(resolveJevEndpoint("jv_otro_abc"), "https://api.typesafe.ai/v1/systemone");
+  assert.equal(resolveJevEndpoint(""), "https://api.typesafe.ai/v1/systemone");
+  assert.equal(
+    resolveJevEndpoint("jv_live_abc", "http://127.0.0.1:9000/decide"),
+    "http://127.0.0.1:9000/decide",
+  );
+  const config = resolveJevConfig({ apiKey: "jv_live_de_prueba" });
+  assert.equal(config.endpoint, "https://jevtypesafeai.com/api/v1/decide");
+  assert.equal(config.model, "jev-latest");
+  assert.equal(config.configured, true);
+});
+
+test("las preguntas noul no llevan criteria en este contrato", () => {
+  const questions = buildQuestions();
+  assert.equal(questions.worth_deep_analysis.type, "choice");
+  assert.equal(questions.primary_gap.type, "choice");
+  assert.ok(questions.worth_deep_analysis.criteria);
+  assert.equal(questions.business_verifiable.type, "noul");
+  assert.equal(questions.evidence_sufficient.type, "noul");
+  assert.equal("criteria" in questions.business_verifiable, false);
+  assert.equal("criteria" in questions.evidence_sufficient, false);
+  assert.deepEqual(Object.keys(questions).sort(), [
+    "business_verifiable",
+    "evidence_sufficient",
+    "primary_gap",
+    "worth_deep_analysis",
+  ]);
+});
+
+test("el cuerpo enviado tiene la forma documentada para /api/v1/decide", async () => {
+  const original = globalThis.fetch;
+  let capturedUrl = "";
+  let capturedAuth = "";
+  let capturedBody: Record<string, unknown> = {};
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const headers = (init?.headers || {}) as Record<string, string>;
+    capturedAuth = headers.Authorization;
+    capturedBody =
+      typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    return jsonResponse(jevAnswer("yes", 0.9));
+  }) as typeof fetch;
+
+  try {
+    await askJev(buildOpportunitySignals(lead(), undefined), undefined, {
+      apiKey: "jv_live_clave_de_prueba",
+    });
+
+    assert.equal(capturedUrl, "https://jevtypesafeai.com/api/v1/decide");
+    assert.equal(capturedAuth, "Bearer jv_live_clave_de_prueba");
+    assert.equal(capturedBody.model, "jev-latest");
+    assert.ok(capturedBody.state);
+    const sentQuestions = capturedBody.questions as Record<string, Record<string, unknown>>;
+    assert.equal(sentQuestions.worth_deep_analysis.type, "choice");
+    const gapCriteria = sentQuestions.primary_gap.criteria as Record<string, string>;
+    assert.equal("no_website" in gapCriteria, true);
+    assert.equal("criteria" in sentQuestions.business_verifiable, false);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("los errores documentados de la API de decisiones se explican", async () => {
+  const cases: { status: number; body: string; pattern: RegExp }[] = [
+    { status: 400, body: JSON.stringify({ error: "questions: invalid type" }), pattern: /400/ },
+    {
+      status: 401,
+      body: JSON.stringify({ error: "invalid api key" }),
+      pattern: /credencial \(401\)/,
+    },
+    {
+      status: 402,
+      body: JSON.stringify({ error: "not enough credits", code: "insufficient_credits" }),
+      pattern: /insufficient_credits/i,
+    },
+    { status: 403, body: JSON.stringify({ error: "account inactive" }), pattern: /inactiva/ },
+    { status: 404, body: JSON.stringify({ error: "unknown endpoint" }), pattern: /404/ },
+    { status: 429, body: JSON.stringify({ error: "too many requests" }), pattern: /429/ },
+    { status: 502, body: JSON.stringify({ error: "upstream error" }), pattern: /502/ },
+  ];
+
+  for (const item of cases) {
+    const patched = patchFetch(() => new Response(item.body, { status: item.status }));
+    try {
+      const decision = await askJev(buildOpportunitySignals(lead(), undefined), undefined, {
+        apiKey: "jv_live_clave_de_prueba",
+      });
+      assert.equal(decision.ok, false);
+      assert.match(decision.error || "", item.pattern);
+      assert.doesNotMatch(decision.error || "", /jv_live_clave_de_prueba/);
+    } finally {
+      patched.restore();
+    }
+  }
+});
+
+test("el uso devuelto se mapea sin inventar valores", () => {
+  assert.deepEqual(
+    mapJevUsage({ input_tokens: 62, cost_usd: 0.000026, credits_remaining_usd: 4.999974 }),
+    {
+      input_tokens: 62,
+      output_tokens: undefined,
+      cost_usd: 0.000026,
+      credits_remaining_usd: 4.999974,
+    },
+  );
+  assert.equal(mapJevUsage({}), undefined);
+  assert.equal(mapJevUsage(null), undefined);
+  assert.equal(mapJevUsage("62"), undefined);
+});
+
+test("una respuesta sin answers se reporta como invalida", async () => {
+  const patched = patchFetch(() => jsonResponse({ model: "jev-1.13.0" }));
+  try {
+    const decision = await askJev(buildOpportunitySignals(lead(), undefined), undefined, {
+      apiKey: "jv_live_clave_de_prueba",
+    });
+    assert.equal(decision.ok, false);
+    assert.match(decision.error || "", /worth_deep_analysis/);
+  } finally {
+    patched.restore();
+  }
+});
+

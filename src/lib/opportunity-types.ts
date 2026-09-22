@@ -38,6 +38,14 @@ export interface JevNoulAnswer {
   noul: number;
 }
 
+/** Uso devuelto por la API de decisiones: tokens, costo y saldo restante. */
+export interface JevUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  credits_remaining_usd?: number;
+}
+
 export type JevRouting = "continue" | "discard" | "review";
 
 export interface JevDecision {
@@ -53,7 +61,7 @@ export interface JevDecision {
   primaryGap?: JevChoiceAnswer;
   businessVerifiable?: JevNoulAnswer;
   evidenceSufficient?: JevNoulAnswer;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: JevUsage;
   requestedAt: string;
 }
 
@@ -128,7 +136,7 @@ export interface OpportunityLogRecord {
       businessVerifiable?: JevNoulAnswer;
       evidenceSufficient?: JevNoulAnswer;
     };
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: JevUsage;
   };
   passedToDeepSeek: boolean;
   deepseek?: {
