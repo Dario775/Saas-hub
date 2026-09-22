@@ -30,7 +30,7 @@ import {
 } from "../src/lib/lead-enrichment";
 import { askJev, buildOpportunitySignals } from "../src/lib/jev";
 import { analyzeWithDeepSeek } from "../src/lib/opportunity-analysis";
-import { resolveWebSearchProvider, searchWeb } from "../src/lib/web-search";
+import { buildDiscoveryQueries, resolveWebSearchProvider, searchWeb } from "../src/lib/web-search";
 import type { WebSearchProvider } from "../src/lib/web-search";
 
 /* ------------------------------------------------------------------ */
@@ -416,8 +416,8 @@ test("con proveedor, la búsqueda web aporta perfiles públicos sin afirmar acti
         ok: true,
         provider: "test",
         items: [
-          { title: "Instagram", url: "https://instagram.com/vwrepuestos" },
-          { title: "Facebook", url: "https://www.facebook.com/vwrepuestos" },
+          { title: "Volkswagen Repuestos Salta", url: "https://instagram.com/volkswagenrepuestos" },
+          { title: "Volkswagen Repuestos Salta", url: "https://www.facebook.com/volkswagenrepuestos" },
         ],
       };
     },
@@ -529,5 +529,146 @@ test("el dossier viaja también al prompt de DeepSeek", async () => {
     assert.equal(analysis.evidenceCoverage.total, DEFAULT_EVALUATED_FIELDS.length);
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Fase 3.1: búsqueda web correlacionada y fuentes opcionales          */
+/* ------------------------------------------------------------------ */
+
+function providerWith(items: { title: string; url: string; snippet?: string }[]): WebSearchProvider {
+  return {
+    id: "test",
+    label: "Test",
+    requiresKey: false,
+    async search() {
+      return { ok: true, provider: "test", items };
+    },
+  };
+}
+
+test("el planificador arma pocas consultas orientadas a identidad", () => {
+  const queries = buildDiscoveryQueries({
+    nombre: "Volkswagen Repuestos",
+    zona: "Salta Capital, Salta",
+    direccion: "Tucumán 266, Salta",
+  });
+  assert.equal(queries.length, 4);
+  assert.ok(queries[0].query.startsWith('"Volkswagen Repuestos"'));
+  assert.ok(queries[0].query.includes("Salta"));
+  assert.ok(queries.some((item) => item.intent === "instagram"));
+  assert.ok(queries.some((item) => item.intent === "identidad_direccion"));
+  assert.deepEqual(buildDiscoveryQueries({}), []);
+});
+
+test("un resultado de búsqueda sin señales de identidad se rechaza y no es evidencia", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(lead(), {
+      skipWebsite: true,
+      webSearchProvider: providerWith([
+        {
+          title: "Repuestera San Martin",
+          url: "https://www.facebook.com/repuestera.san.martin/",
+          snippet: "Repuestos para autos en San Martin",
+        },
+      ]),
+    });
+    assert.equal(supportedValues(result.evidence, "facebook").length, 0);
+    assert.equal(result.summary.searchResults?.rejected, 1);
+    assert.equal(result.summary.searchResults?.accepted, 0);
+    assert.equal(result.dossier.social.facebook.length, 0);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("un perfil social correlacionado se registra sin afirmar actividad", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(lead(), {
+      skipWebsite: true,
+      webSearchProvider: providerWith([
+        {
+          title: "Volkswagen Repuestos Salta",
+          url: "https://www.facebook.com/volkswagen.repuestos.salta/",
+          snippet: "Volkswagen Repuestos, Salta Capital",
+        },
+      ]),
+    });
+    const facebook = supportedValues(result.evidence, "facebook");
+    assert.equal(facebook.length, 1);
+    assert.equal(result.summary.searchResults?.accepted, 1);
+    const item = result.evidence.find((entry) => entry.field === "facebook");
+    assert.match(item?.notes || "", /No se verificó actividad/);
+    assert.match(item?.notes || "", /Correlación/);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("un perfil con handle parecido pero ajeno se rechaza", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(lead(), {
+      skipWebsite: true,
+      webSearchProvider: providerWith([
+        {
+          title: "Volkswagen Repuestos Salta - Repuestos VW",
+          url: "https://www.instagram.com/hausrepuestosvw/",
+          snippet: "Repuestos Volkswagen en Salta",
+        },
+      ]),
+    });
+    assert.equal(supportedValues(result.evidence, "instagram").length, 0);
+    assert.equal(result.summary.searchResults?.rejected, 1);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("un directorio correlacionado no se toma como sitio oficial", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(lead(), {
+      skipWebsite: true,
+      webSearchProvider: providerWith([
+        {
+          title: "Volkswagen Repuestos en Salta - Páginas Amarillas",
+          url: "https://www.paginasamarillas.com.ar/b/volkswagen-repuestos/salta",
+          snippet: "Volkswagen Repuestos, Tucumán 266, Salta. Tel: 0387 421-0000",
+        },
+      ]),
+    });
+    assert.equal(supportedValues(result.evidence, "website").length, 0);
+    const phone = supportedValues(result.evidence, "phone");
+    assert.equal(phone.length, 1);
+    const item = result.evidence.find((entry) => entry.field === "phone");
+    assert.equal(item?.source, "web_search");
+    assert.match(item?.notes || "", /directorio/i);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("Google Places ausente es una fuente opcional: no es fallo ni afecta la cobertura", async () => {
+  const previous = process.env.GOOGLE_PLACES_KEY;
+  delete process.env.GOOGLE_PLACES_KEY;
+  const patched = patchFetch(() => {
+    throw new Error("no debería llamarse a la red");
+  });
+  try {
+    const result = await discoverBusinessPresence(lead(), { skipWebSearch: true, skipWebsite: true });
+    assert.equal(result.summary.sourcesFailed.length, 0);
+    assert.ok(
+      (result.summary.sourcesSkipped || []).some((item) => item.source === "google_places"),
+    );
+    assert.equal(result.summary.sourcesSucceeded.length, 0);
+    assert.equal(result.summary.coverageAfter.total, DEFAULT_EVALUATED_FIELDS.length);
+    assert.equal(result.summary.coverageAfter.supported, 2);
+    assert.equal(patched.calls.length, 0);
+  } finally {
+    patched.restore();
+    if (previous !== undefined) process.env.GOOGLE_PLACES_KEY = previous;
   }
 });

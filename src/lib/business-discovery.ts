@@ -12,13 +12,14 @@ import type { EvidenceField, LeadEvidence } from "./lead-evidence";
 import {
   identityStatusToEvidence,
   matchBusinessIdentity,
+  matchSearchResult,
   subjectIdentity,
 } from "./identity-match";
 import type { IdentityMatchResult } from "./identity-match";
 import { normalizeIdentityText } from "./lead-identity";
 import { placesConfigured, searchPlaces } from "./google-places";
 import type { PlacesCandidate } from "./google-places";
-import { resolveWebSearchProvider, searchWeb } from "./web-search";
+import { buildDiscoveryQueries, resolveWebSearchProvider, searchWeb } from "./web-search";
 import type { WebSearchItem, WebSearchProvider } from "./web-search";
 import type {
   BusinessDossier,
@@ -62,6 +63,8 @@ export interface DiscoveryLeadLike {
 
 export interface DiscoveryOptions {
   forceRefresh?: boolean;
+  /** Máximo de consultas a la búsqueda web por negocio. */
+  maxWebSearchQueries?: number;
   skipWebsite?: boolean;
   skipGoogle?: boolean;
   skipWebSearch?: boolean;
@@ -324,6 +327,31 @@ function socialFieldFor(url: string): EvidenceField {
   return known ? known.field : "social";
 }
 
+/**
+ * Directorios y marketplaces: NUNCA son el sitio oficial de un comercio.
+ * Solo pueden aportar datos secundarios del resumen, y solo si la identidad
+ * correlaciona.
+ */
+const DIRECTORY_HOSTS = [
+  "paginasamarillas",
+  "abctelefonos",
+  "telexplorer",
+  "cylex",
+  "yelp",
+  "tripadvisor",
+  "foursquare",
+  "guia",
+  "directorio",
+  "mercadolibre",
+  "mercadoshops",
+  "tiendanube",
+  "shopify",
+  "wikipedia",
+  "dateas",
+  "empresite",
+  "informacion-empresas",
+];
+
 /** Dominios que nunca son el sitio oficial de un comercio. */
 const SITE_HOST_BLOCKLIST = [
   "instagram",
@@ -371,48 +399,77 @@ export function officialSiteCandidate(
   return undefined;
 }
 
-function webSearchEvidence(
-  items: WebSearchItem[],
-  businessName: string | undefined,
+function evidenceForSearchItem(
+  lead: DiscoveryLeadLike,
+  item: WebSearchItem,
+  verdict: { status: string; confidence: number; matchedSignals: string[] },
   alreadyHasWebsite: boolean,
 ): LeadEvidence[] {
   const evidence: LeadEvidence[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    const field = socialFieldFor(item.url);
-    if (field === "social" && !/instagram|facebook|tiktok|linkedin|youtube/i.test(hostOf(item.url))) {
-      continue;
-    }
-    const key = `${field}|${item.url}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  const host = hostOf(item.url);
+  const isSocial = /instagram|facebook|tiktok|linkedin|youtube|fb\.com/i.test(host);
+  const isDirectory = DIRECTORY_HOSTS.some((blocked) => host.includes(blocked));
+  const reason = "Correlación: " + (verdict.matchedSignals.join(", ") || "sin señales");
+
+  if (isSocial) {
     evidence.push(
       makeEvidence({
-        field,
+        field: socialFieldFor(item.url),
         status: "found",
         value: item.url,
         source: "web_search",
         sourceUrl: item.url,
-        confidence: 0.7,
-        notes: "Enlace público hallado por búsqueda web. No se verificó actividad del perfil.",
+        confidence: verdict.status === "matched" ? 0.85 : 0.7,
+        notes: "Perfil público hallado por búsqueda web y correlacionado con el negocio. " + reason + ". No se verificó actividad del perfil.",
       }),
     );
+    return evidence;
   }
-  if (!alreadyHasWebsite) {
-    const candidate = officialSiteCandidate(businessName, items);
-    if (candidate) {
+
+  if (isDirectory) {
+    // Nunca es sitio oficial: solo puede aportar datos secundarios del resumen.
+    const snippet = item.snippet || "";
+    const phoneMatch = snippet.match(/(?:\+?54[\s-]?9?[\s-]?)?(?:\d{2,4}[\s-]?){1,3}\d{4}/);
+    if (phoneMatch) {
       evidence.push(
         makeEvidence({
-          field: "website",
+          field: "phone",
           status: "found",
-          value: candidate.url,
+          value: phoneMatch[0].trim(),
           source: "web_search",
-          sourceUrl: candidate.url,
-          confidence: 0.6,
-          notes: "Candidato a sitio oficial por búsqueda web; identidad no confirmada.",
+          sourceUrl: item.url,
+          confidence: 0.5,
+          notes: "Teléfono publicado en un directorio, correlacionado con el negocio. " + reason,
+        }),
+      );
+    } else {
+      evidence.push(
+        makeEvidence({
+          field: "social",
+          status: "inferred",
+          value: item.url,
+          source: "web_search",
+          sourceUrl: item.url,
+          confidence: 0.4,
+          notes: "Directorio o listado relacionado con el negocio (no es su sitio oficial). " + reason,
         }),
       );
     }
+    return evidence;
+  }
+
+  if (!alreadyHasWebsite && officialSiteCandidate(lead.nombre, [item])) {
+    evidence.push(
+      makeEvidence({
+        field: "website",
+        status: "found",
+        value: item.url,
+        source: "web_search",
+        sourceUrl: item.url,
+        confidence: verdict.status === "matched" ? 0.75 : 0.6,
+        notes: "Candidato a sitio oficial por búsqueda web, correlacionado con el negocio. " + reason,
+      }),
+    );
   }
   return evidence;
 }
@@ -510,6 +567,9 @@ export async function discoverBusinessPresence(
   const sourcesAttempted: string[] = [];
   const sourcesSucceeded: string[] = [];
   const sourcesFailed: { source: string; error: string }[] = [];
+  const sourcesSkipped: { source: string; reason: string }[] = [];
+  const webSearchQueries: string[] = [];
+  const searchStats = { queries: 0, evaluated: 0, accepted: 0, rejected: 0, ambiguous: 0 };
   const errors: string[] = [];
 
   const existingEvidence = lead.evidence || [];
@@ -529,6 +589,9 @@ export async function discoverBusinessPresence(
           sourcesAttempted: ["cache"],
           sourcesSucceeded: ["cache"],
           sourcesFailed: [],
+          sourcesSkipped: [],
+          webSearchQueries: [],
+          searchResults: { queries: 0, evaluated: 0, accepted: 0, rejected: 0, ambiguous: 0 },
           coverageBefore,
           coverageAfter: cached.coverage,
           identity: cached.identity ?? null,
@@ -543,32 +606,105 @@ export async function discoverBusinessPresence(
   let identity: IdentityMatchSummary | null = null;
   let googleBlock: DossierGoogleBlock | undefined;
 
-  // 1) Google Places (si hay clave y no se pidió omitirlo).
+  // 1) Google Places: fuente OPCIONAL. Sin clave no es un fallo y no afecta
+  // la cobertura: el descubrimiento es válido sin ella.
   if (!options.skipGoogle) {
-    sourcesAttempted.push("google_places");
-    const outcome = await googleDiscovery(lead, options, evidence);
-    if (outcome.ok) sourcesSucceeded.push("google_places");
-    else if (outcome.error) sourcesFailed.push({ source: "google_places", error: outcome.error });
-    googleBlock = outcome.google;
-    identity = outcome.identity ?? identity;
-    conflicts.push(...outcome.conflicts);
+    if (!placesConfigured(options.googlePlacesKey)) {
+      sourcesSkipped.push({
+        source: "google_places",
+        reason: "Fuente opcional no configurada (sin GOOGLE_PLACES_KEY).",
+      });
+    } else {
+      sourcesAttempted.push("google_places");
+      const outcome = await googleDiscovery(lead, options, evidence);
+      if (outcome.ok) sourcesSucceeded.push("google_places");
+      else if (outcome.error) sourcesFailed.push({ source: "google_places", error: outcome.error });
+      googleBlock = outcome.google;
+      identity = outcome.identity ?? identity;
+      conflicts.push(...outcome.conflicts);
+    }
   }
 
-  // 2) Búsqueda web opcional (perfiles públicos y candidato a sitio oficial).
+  // 2) Búsqueda web opcional: pocas consultas orientadas a identidad y, sobre
+  // todo, ningún resultado se convierte en dato sin correlacionar primero.
   const provider =
     options.webSearchProvider === undefined
       ? resolveWebSearchProvider()
       : options.webSearchProvider;
   if (!options.skipWebSearch && provider) {
     sourcesAttempted.push("web_search");
-    const query = [lead.nombre, lead.zona].filter(Boolean).join(" ").trim();
-    const outcome = await searchWeb(query, { provider, limit: 5, timeoutMs: options.timeoutMs });
-    if (outcome.ok) {
-      sourcesSucceeded.push("web_search");
-      const alreadyHasWebsite = supportedValues(evidence, "website").length > 0;
-      evidence = mergeEvidence(evidence, webSearchEvidence(outcome.items, lead.nombre, alreadyHasWebsite));
-    } else if (outcome.error) {
-      sourcesFailed.push({ source: "web_search", error: outcome.error });
+    const planned = buildDiscoveryQueries(lead, options.maxWebSearchQueries ?? 4);
+    const seenUrls = new Set<string>();
+    const collected: WebSearchItem[] = [];
+    let queriesOk = 0;
+    let lastError = "";
+    for (const request of planned) {
+      webSearchQueries.push(request.query);
+      searchStats.queries += 1;
+      const outcome = await searchWeb(request.query, {
+        provider,
+        limit: 6,
+        timeoutMs: options.timeoutMs,
+      });
+      if (!outcome.ok) {
+        lastError = outcome.error || "sin resultados";
+        continue;
+      }
+      queriesOk += 1;
+      for (const item of outcome.items) {
+        if (!item.url || seenUrls.has(item.url)) continue;
+        seenUrls.add(item.url);
+        collected.push(item);
+      }
+    }
+    if (queriesOk > 0) sourcesSucceeded.push("web_search");
+    else if (lastError) sourcesFailed.push({ source: "web_search", error: lastError });
+
+    const ambiguousUrls: string[] = [];
+    for (const item of collected) {
+      const verdict = matchSearchResult(
+        {
+          nombre: lead.nombre,
+          direccion: lead.direccion,
+          zona: lead.zona,
+          telefono: lead.telefono,
+          website: lead.website,
+          rubro: lead.rubro,
+        },
+        item,
+      );
+      searchStats.evaluated += 1;
+      if (verdict.accepted) {
+        searchStats.accepted += 1;
+        const alreadyHasWebsite = supportedValues(evidence, "website").length > 0;
+        evidence = mergeEvidence(
+          evidence,
+          evidenceForSearchItem(lead, item, verdict, alreadyHasWebsite),
+        );
+      } else if (verdict.status === "ambiguous") {
+        searchStats.ambiguous += 1;
+        ambiguousUrls.push(item.url);
+      } else {
+        searchStats.rejected += 1;
+      }
+    }
+
+    if (ambiguousUrls.length) {
+      // Nunca se fusiona un candidato ambiguo: solo se deja constancia.
+      evidence = mergeEvidence(evidence, [
+        makeEvidence({
+          field: "identity",
+          status: "conflicting",
+          source: "web_search",
+          notes:
+            ambiguousUrls.length +
+            " resultado(s) de búsqueda con identidad ambigua; no se fusionaron. Ejemplo: " +
+            ambiguousUrls[0].slice(0, 90),
+        }),
+      ]);
+      conflicts.push(
+        "Búsqueda web: " + ambiguousUrls.length + " candidato(s) ambiguo(s), no fusionados",
+      );
     }
   }
 
@@ -667,6 +803,9 @@ export async function discoverBusinessPresence(
       sourcesAttempted,
       sourcesSucceeded,
       sourcesFailed,
+      sourcesSkipped,
+      webSearchQueries,
+      searchResults: searchStats,
       coverageBefore,
       coverageAfter,
       identity,

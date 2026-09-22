@@ -131,6 +131,35 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
   };
 }
 
+export interface PlannedQuery {
+  intent: "identidad_ciudad" | "identidad_direccion" | "instagram" | "facebook" | "whatsapp";
+  query: string;
+}
+
+/**
+ * Plan de consultas para un negocio: pocas y orientadas a identidad.
+ * Se evita disparar búsquedas de más: máximo 4 por negocio (configurable).
+ */
+export function buildDiscoveryQueries(
+  lead: { nombre?: string; zona?: string; direccion?: string },
+  max = 4,
+): PlannedQuery[] {
+  const name = (lead.nombre || "").trim();
+  if (!name) return [];
+  const city = (lead.zona || "").split(",")[0].trim();
+  const address = (lead.direccion || "").trim();
+  const planned: PlannedQuery[] = [
+    { intent: "identidad_ciudad", query: '"' + name + '"' + (city ? ' "' + city + '"' : "") },
+  ];
+  if (address) {
+    planned.push({ intent: "identidad_direccion", query: '"' + name + '" "' + address.split(",")[0].trim() + '"' });
+  }
+  planned.push({ intent: "instagram", query: '"' + name + '" instagram' + (city ? " " + city : "") });
+  planned.push({ intent: "facebook", query: '"' + name + '" facebook' + (city ? " " + city : "") });
+  planned.push({ intent: "whatsapp", query: '"' + name + '" whatsapp' + (city ? " " + city : "") });
+  return planned.slice(0, Math.max(1, Math.min(max, 5)));
+}
+
 /** Devuelve el proveedor configurado, o null si no hay ninguno. */
 export function resolveWebSearchProvider(
   env: NodeJS.ProcessEnv = process.env,

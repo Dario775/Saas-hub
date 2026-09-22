@@ -1651,6 +1651,28 @@ ${demoUrl}
                         .join(" | ")}
                     </p>
                   ) : null}
+                  {analysisResult.discovery?.sourcesSkipped?.length ? (
+                    <p className="text-[11px] text-slate-500">
+                      Fuentes opcionales no configuradas:{" "}
+                      {analysisResult.discovery.sourcesSkipped
+                        .map((item) => item.source + " (" + item.reason + ")")
+                        .join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.webSearchQueries?.length ? (
+                    <p className="text-[11px] text-slate-600">
+                      Consultas web enviadas:{" "}
+                      {analysisResult.discovery.webSearchQueries.join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.searchResults ? (
+                    <p className="text-[11px] text-slate-600">
+                      Resultados evaluados: {analysisResult.discovery.searchResults.evaluated} ·
+                      aceptados {analysisResult.discovery.searchResults.accepted} · rechazados{" "}
+                      {analysisResult.discovery.searchResults.rejected} · ambiguos (no fusionados){" "}
+                      {analysisResult.discovery.searchResults.ambiguous}
+                    </p>
+                  ) : null}
                   {analysisResult.discovery?.cacheHit ? (
                     <p className="text-[11px] text-slate-500">
                       Dossier reutilizado de la caché (más reciente que el TTL).

@@ -161,6 +161,18 @@ export interface DiscoverySummary {
   sourcesAttempted: string[];
   sourcesSucceeded: string[];
   sourcesFailed: { source: string; error: string }[];
+  /** Fuentes opcionales que no están configuradas: no son fallos. */
+  sourcesSkipped?: { source: string; reason: string }[];
+  /** Consultas de búsqueda web efectivamente enviadas. */
+  webSearchQueries?: string[];
+  /** Resultados de búsqueda evaluados, aceptados y rechazados por correlación. */
+  searchResults?: {
+    queries: number;
+    evaluated: number;
+    accepted: number;
+    rejected: number;
+    ambiguous: number;
+  };
   coverageBefore: EvidenceCoverage;
   coverageAfter: EvidenceCoverage;
   identity?: IdentityMatchSummary | null;
