@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
           telefono: phone,
           website: website,
           email: p.extratags?.email || p.extratags?.["contact:email"] || "",
-          rating: Number((4.3 + Math.random() * 0.6).toFixed(1)),
+          // OpenStreetMap no expone puntuaciones: el campo queda sin definir y nunca se estima.
           types: p.type || p.class || `${cleanRubro.toLowerCase()}|shop`,
           status: "nuevo",
           batch: `${cleanRubro} en ${resolvedLocationName}`,

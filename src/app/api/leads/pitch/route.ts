@@ -30,14 +30,14 @@ Reglas:
 3. Debe mencionar el nombre del negocio ("${lead.nombre}"), su rubro ("${lead.rubro}") y su ubicación o zona ("${lead.zona || 'su localidad'}").
 4. Proponer un gancho claro sobre cómo ${brandName} ${valueProposition ? `(${valueProposition})` : 'ayuda a digitalizar, facturar y multiplicar sus clientes'} sin complicaciones.
 5. Llamado a la acción (CTA) directo: pedir 5 minutos para una demo rápida sin compromiso.
-6. Devuelve únicamente el texto del mensaje, sin comillas ni encabezados adicionales.`;
+6. Devuelve únicamente el texto del mensaje, sin comillas ni encabezados adicionales.
+7. No inventes datos que no figuren en la ficha del negocio (puntuaciones, reseñas, horarios, cantidad de clientes): si un dato no está, omítelo.`;
 
     const userPrompt = `Negocio: ${lead.nombre}
 Rubro: ${lead.rubro}
 Zona: ${lead.zona}
 Web: ${lead.website || "No tiene"}
-Rating en Google Maps: ${lead.rating || "N/A"}
-
+${lead.rating ? `Puntuación pública informada por la fuente de datos: ${lead.rating}\n` : ""}
 Redacta el mensaje de prospección:`;
 
     let generatedPitch = "";

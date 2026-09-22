@@ -1,7 +1,14 @@
 import { fetchWithRetry } from "./fetch-helper";
 
+export type LLMProvider =
+  | "openrouter"
+  | "ollama"
+  | "gemini"
+  | "openai"
+  | "deepseek";
+
 export interface LLMSettings {
-  provider?: "openrouter" | "ollama" | "gemini" | "openai";
+  provider?: LLMProvider;
   openrouterKey?: string;
   openrouterModel?: string;
   ollamaUrl?: string;
@@ -10,6 +17,94 @@ export interface LLMSettings {
   geminiModel?: string;
   openaiApiKey?: string;
   openaiModel?: string;
+  deepseekApiKey?: string;
+  deepseekModel?: string;
+}
+
+/**
+ * Valores por defecto de cada proveedor de IA.
+ * Única fuente para el modelo y el endpoint por defecto de los proveedores nuevos.
+ */
+export const LLM_DEFAULTS: Record<
+  LLMProvider,
+  { model: string; url: string; label: string }
+> = {
+  openrouter: {
+    model: "google/gemini-2.5-flash:free",
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    label: "OpenRouter",
+  },
+  openai: {
+    model: "gpt-4o-mini",
+    url: "https://api.openai.com/v1/chat/completions",
+    label: "OpenAI",
+  },
+  gemini: {
+    model: "gemini-2.5-flash",
+    url: "https://generativelanguage.googleapis.com/v1beta/models",
+    label: "Google Gemini",
+  },
+  deepseek: {
+    model: "deepseek-flash",
+    url: "https://api.deepseek.com/chat/completions",
+    label: "DeepSeek",
+  },
+  ollama: {
+    model: "llama3",
+    url: "http://127.0.0.1:11434",
+    label: "Ollama (local)",
+  },
+};
+
+/** Proveedor y modelo efectivos según la configuración y el entorno, sin llamar a ninguna API. */
+export function resolveLLMConfig(settings?: LLMSettings): {
+  provider: LLMProvider;
+  model: string;
+} {
+  const provider: LLMProvider =
+    settings?.provider ||
+    (process.env.LLM_PROVIDER as LLMProvider) ||
+    "openrouter";
+
+  if (provider === "openai")
+    return {
+      provider,
+      model:
+        settings?.openaiModel ||
+        process.env.OPENAI_MODEL ||
+        LLM_DEFAULTS.openai.model,
+    };
+  if (provider === "gemini")
+    return {
+      provider,
+      model:
+        settings?.geminiModel ||
+        process.env.GEMINI_MODEL ||
+        LLM_DEFAULTS.gemini.model,
+    };
+  if (provider === "openrouter")
+    return {
+      provider,
+      model:
+        settings?.openrouterModel ||
+        process.env.OPENROUTER_MODEL ||
+        LLM_DEFAULTS.openrouter.model,
+    };
+  if (provider === "deepseek")
+    return {
+      provider,
+      model:
+        settings?.deepseekModel ||
+        process.env.DEEPSEEK_MODEL ||
+        LLM_DEFAULTS.deepseek.model,
+    };
+  return {
+    provider,
+    model:
+      settings?.ollamaModel ||
+      process.env.LOCAL_LLM_MODEL ||
+      LLM_DEFAULTS.ollama.model,
+  };
 }
 
 export async function queryLLM(
@@ -19,7 +114,10 @@ export async function queryLLM(
   expectJson: boolean = true
 ): Promise<string> {
   // Combinar settings personalizadas con variables de entorno de fallback
-  const provider = settings?.provider || (process.env.LLM_PROVIDER as "openrouter" | "ollama" | "gemini" | "openai") || "openrouter";
+  const provider: LLMProvider =
+    settings?.provider ||
+    (process.env.LLM_PROVIDER as LLMProvider) ||
+    "openrouter";
   
   let url = "";
   const headers: Record<string, string> = {
@@ -44,6 +142,43 @@ export async function queryLLM(
 
     if (expectJson) {
       body.response_format = { type: "json_object" };
+    }
+  } else if (provider === "deepseek") {
+    const apiKey = settings?.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "";
+    const model =
+      settings?.deepseekModel ||
+      process.env.DEEPSEEK_MODEL ||
+      LLM_DEFAULTS.deepseek.model;
+
+    if (!apiKey.trim()) {
+      throw new Error(
+        "Falta DEEPSEEK_API_KEY: guardala en la configuración de IA del panel o en .env.local para usar DeepSeek.",
+      );
+    }
+
+    url = LLM_DEFAULTS.deepseek.url;
+    headers["Authorization"] = `Bearer ${apiKey}`;
+
+    body = {
+      model: model,
+      messages: [
+        {
+          role: "system",
+          content: expectJson
+            ? systemPrompt + "\nResponde unicamente con un objeto JSON valido."
+            : systemPrompt,
+        },
+        { role: "user", content: userPrompt },
+      ],
+    };
+
+    if (expectJson) {
+      body.response_format = { type: "json_object" };
+    }
+
+    // El razonamiento extendido se habilita con DEEPSEEK_THINKING=true (más lento y más caro).
+    if (process.env.DEEPSEEK_THINKING === "true") {
+      body.thinking = { type: "enabled" };
     }
   } else if (provider === "gemini") {
     const apiKey = settings?.geminiApiKey || process.env.GEMINI_API_KEY || "";
@@ -133,6 +268,25 @@ export async function queryLLM(
   if (!response.ok) {
     const errText = await response.text();
     console.error(`[LLM Response] Error Body:`, errText);
+    if (provider === "deepseek") {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(
+          "DeepSeek rechazó la credencial (" +
+            response.status +
+            "). Revisá DEEPSEEK_API_KEY en la configuración de IA.",
+        );
+      }
+      if (response.status === 402) {
+        throw new Error(
+          "DeepSeek no tiene saldo disponible (402). Cargá crédito en platform.deepseek.com.",
+        );
+      }
+      if (response.status === 400) {
+        throw new Error(
+          "DeepSeek rechazó la solicitud (400): " + errText.slice(0, 300),
+        );
+      }
+    }
     if (response.status === 429) {
       throw new Error(`El proveedor de IA alcanzó su límite de solicitudes. Esperá unos segundos o revisá la cuota de tu cuenta.`);
     }

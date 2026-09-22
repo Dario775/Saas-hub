@@ -303,7 +303,7 @@ export function useWorkspace() {
 
   // AI Settings states
   const [llmProvider, setLlmProvider] = useState<
-    "openrouter" | "ollama" | "gemini" | "openai"
+    "openrouter" | "ollama" | "gemini" | "openai" | "deepseek"
   >("ollama");
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [openrouterModel, setOpenrouterModel] = useState(
@@ -313,6 +313,9 @@ export function useWorkspace() {
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [deepseekApiKey, setDeepseekApiKey] = useState("");
+  const [deepseekModel, setDeepseekModel] = useState("deepseek-flash");
+  const [deepseekEnvKeySet, setDeepseekEnvKeySet] = useState<boolean>(false);
   const [showLlmModal, setShowLlmModal] = useState(false);
   const [showImageLightbox, setShowImageLightbox] = useState(false);
 
@@ -326,6 +329,8 @@ export function useWorkspace() {
     geminiModel,
     openaiApiKey,
     openaiModel: "gpt-4o-mini",
+    deepseekApiKey,
+    deepseekModel,
   };
 
   useEffect(() => {
@@ -363,8 +368,10 @@ export function useWorkspace() {
         if (settings.ollamaUrl) setOllamaUrl(settings.ollamaUrl);
         if (settings.ollamaModel) setOllamaModel(settings.ollamaModel);
         if (settings.geminiModel) setGeminiModel(settings.geminiModel);
+        if (settings.deepseekModel) setDeepseekModel(settings.deepseekModel);
         setOpenaiEnvKeySet(Boolean(settings.openaiApiKeyConfigured));
         setGeminiEnvKeySet(Boolean(settings.geminiApiKeyConfigured));
+        setDeepseekEnvKeySet(Boolean(settings.deepseekKeyConfigured));
       } catch {
         toast.error("No se pudo cargar la configuración de IA.");
       }
@@ -462,7 +469,7 @@ export function useWorkspace() {
   }, [imageSource, selectedGenerator]);
 
   async function handleSaveLlmSettings(
-    provider: "openrouter" | "ollama" | "gemini" | "openai",
+    provider: "openrouter" | "ollama" | "gemini" | "openai" | "deepseek",
     key: string,
     model: string,
     url: string,
@@ -470,6 +477,8 @@ export function useWorkspace() {
     gKey: string,
     gModel: string,
     oKey: string,
+    dKey: string,
+    dModel: string,
   ) {
     setLlmProvider(provider);
     setOpenrouterKey(key);
@@ -479,6 +488,8 @@ export function useWorkspace() {
     setGeminiApiKey(gKey);
     setGeminiModel(gModel);
     setOpenaiApiKey(oKey);
+    setDeepseekApiKey(dKey);
+    setDeepseekModel(dModel);
 
     try {
       const response = await fetch("/api/settings", {
@@ -493,6 +504,8 @@ export function useWorkspace() {
           geminiApiKey: gKey,
           geminiModel: gModel,
           openaiApiKey: oKey,
+          deepseekKey: dKey,
+          deepseekModel: dModel,
         }),
       });
       if (!response.ok) throw new Error((await response.json()).error);
@@ -501,6 +514,8 @@ export function useWorkspace() {
       setOpenaiApiKey("");
       if (gKey) setGeminiEnvKeySet(true);
       if (oKey) setOpenaiEnvKeySet(true);
+      setDeepseekApiKey("");
+      if (dKey) setDeepseekEnvKeySet(true);
       setShowLlmModal(false);
       toast.success("Conexión guardada de forma privada en el servidor");
     } catch (error) {
@@ -1779,6 +1794,12 @@ export function useWorkspace() {
     setGeminiApiKey,
     geminiModel,
     setGeminiModel,
+    deepseekApiKey,
+    setDeepseekApiKey,
+    deepseekModel,
+    setDeepseekModel,
+    deepseekEnvKeySet,
+    setDeepseekEnvKeySet,
     showLlmModal,
     setShowLlmModal,
     showImageLightbox,

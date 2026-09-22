@@ -13,6 +13,10 @@ export interface LeadItem {
   telefono?: string;
   website?: string;
   email?: string;
+  /**
+   * Puntuación pública real cuando la fuente la provee (Google Places).
+   * OpenStreetMap no la expone: en ese caso queda sin definir y nunca se estima.
+   */
   rating?: number | string;
   types?: string;
   status: LeadStatus;
@@ -205,7 +209,7 @@ export function getLeads(): LeadItem[] {
       telefono: l.telefono || "",
       website: l.website || "",
       email: l.email || "",
-      rating: l.rating || "",
+      rating: l.rating || undefined,
       types: l.types || "",
       status: l.status || crmEntry.status || "nuevo",
       notes: l.notes ?? crmEntry.notes ?? "",

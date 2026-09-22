@@ -27,6 +27,10 @@ export default function AISettingsModal({
     setGeminiApiKey,
     geminiModel,
     setGeminiModel,
+    deepseekApiKey,
+    setDeepseekApiKey,
+    deepseekModel,
+    setDeepseekModel,
     openaiApiKey,
     setOpenaiApiKey,
     handleSaveLlmSettings,
@@ -65,7 +69,7 @@ export default function AISettingsModal({
                 <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                   Proveedor de IA
                 </Label>
-                <div className="grid grid-cols-4 gap-1">
+                <div className="grid grid-cols-5 gap-1">
                   <button
                     onClick={() => setLlmProvider("openrouter")}
                     className={`px-1 py-2 rounded-xl border text-[9px] sm:text-xs font-bold transition-all cursor-pointer ${
@@ -95,6 +99,16 @@ export default function AISettingsModal({
                     }`}
                   >
                     ♊ Gemini
+                  </button>
+                  <button
+                    onClick={() => setLlmProvider("deepseek")}
+                    className={`px-1 py-2 rounded-xl border text-[9px] sm:text-xs font-bold transition-all cursor-pointer ${
+                      llmProvider === "deepseek"
+                        ? "bg-purple-650/20 text-purple-300 border-purple-500/40 shadow-[0_0_15px_rgba(168,85,247,0.1)] font-bold"
+                        : "bg-white/[0.01] border-white/[0.06] text-slate-400 hover:text-slate-200 hover:bg-white/[0.02]"
+                    }`}
+                  >
+                    DeepSeek
                   </button>
                   <button
                     onClick={() => setLlmProvider("openai" as any)}
@@ -220,6 +234,43 @@ export default function AISettingsModal({
                 </div>
               )}
 
+              {llmProvider === "deepseek" && (
+                <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="ds-key"
+                      className="text-[10px] font-bold text-slate-500 uppercase tracking-wider"
+                    >
+                      API Key de DeepSeek
+                    </Label>
+                    <Input
+                      id="ds-key"
+                      type="password"
+                      placeholder="sk-..."
+                      value={deepseekApiKey}
+                      onChange={(e) => setDeepseekApiKey(e.target.value)}
+                      className="bg-white/[0.02] border-white/[0.08] focus:border-purple-550/40 focus:ring-purple-500/30 text-slate-100 placeholder:text-slate-650 rounded-xl text-xs py-5"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="ds-model"
+                      className="text-[10px] font-bold text-slate-500 uppercase tracking-wider"
+                    >
+                      Modelo de DeepSeek
+                    </Label>
+                    <Input
+                      id="ds-model"
+                      type="text"
+                      placeholder="deepseek-flash"
+                      value={deepseekModel}
+                      onChange={(e) => setDeepseekModel(e.target.value)}
+                      className="bg-white/[0.02] border-white/[0.08] focus:border-purple-550/40 focus:ring-purple-500/30 text-slate-100 placeholder:text-slate-650 rounded-xl text-xs py-5"
+                    />
+                  </div>
+                </div>
+              )}
+
               {llmProvider === ("openai" as any) && (
                 <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
                   <div className="space-y-2">
@@ -261,6 +312,8 @@ export default function AISettingsModal({
                     geminiApiKey,
                     geminiModel,
                     openaiApiKey,
+                    deepseekApiKey,
+                    deepseekModel,
                   );
                 }}
                 className="bg-purple-600 hover:bg-purple-550 text-white rounded-xl px-5 shadow-[0_0_20px_rgba(168,85,247,0.2)] border border-purple-500/20 text-xs py-4.5"
