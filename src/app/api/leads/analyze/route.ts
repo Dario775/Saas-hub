@@ -16,11 +16,8 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => ({}) as Record<string, unknown>);
-    const placeId =
-      body && typeof (body as Record<string, unknown>).placeId === "string"
-        ? ((body as Record<string, unknown>).placeId as string).trim()
-        : "";
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const placeId = typeof body.placeId === "string" ? body.placeId.trim() : "";
 
     if (!placeId) {
       return NextResponse.json(
@@ -39,9 +36,11 @@ export async function POST(request: NextRequest) {
 
     const alreadyRunning = isAnalysisInFlight(placeId);
     const result = await analyzeOpportunity(lead, {
-      skipEnrichment: (body as Record<string, unknown>).skipEnrichment === true,
-      skipJev: (body as Record<string, unknown>).skipJev === true,
-      skipAnalysis: (body as Record<string, unknown>).skipAnalysis === true,
+      skipEnrichment: body.skipEnrichment === true,
+      skipJev: body.skipJev === true,
+      skipAnalysis: body.skipAnalysis === true,
+      // Vuelve a consultar las fuentes en lugar de usar el dossier guardado.
+      forceRefresh: body.forceRefresh === true,
       seller: resolveSellerContext(),
     });
 

@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { enrichLead } from "./lead-enrichment";
-import type { EnrichmentOptions } from "./lead-enrichment";
+import { discoverBusinessPresence } from "./business-discovery";
+import type { DiscoveryOptions } from "./business-discovery";
+import { DEFAULT_EVALUATED_FIELDS, evidenceCoverage, mergeEvidence } from "./lead-evidence";
 import type { LeadEvidence } from "./lead-evidence";
-import { mergeEvidence } from "./lead-evidence";
 import type { JevOptions } from "./jev";
 import { askJev, buildOpportunitySignals } from "./jev";
 import { appendOpportunityLog } from "./opportunity-log";
 import { analyzeWithDeepSeek } from "./opportunity-analysis";
 import type {
+  BusinessDossier,
+  DiscoverySummary,
+  EnrichmentSummary,
   JevDecision,
   OpportunityLogRecord,
   OpportunityResult,
@@ -20,11 +23,11 @@ import type { LeadItem } from "./leads-service";
 /**
  * Orquestador del Opportunity Engine.
  *
- *   Lead -> enriquecer -> evidencia -> Jev -> (descarta: fin) -> DeepSeek -> resultado
+ *   Lead -> descubrimiento digital -> evidencias + dossier -> Jev -> DeepSeek
  *
  * Se ejecuta únicamente por acción explícita del usuario. No contacta a nadie,
- * no publica nada y no modifica datos existentes: solo agrega evidencia y un
- * resumen del último análisis al prospecto.
+ * no publica nada y no modifica datos existentes: solo agrega evidencia, un
+ * dossier y un resumen del último análisis al prospecto.
  */
 
 export interface OpportunityLeadStore {
@@ -33,6 +36,7 @@ export interface OpportunityLeadStore {
     leadId: string,
     evidence: LeadEvidence[],
     summary?: OpportunitySummary | null,
+    dossier?: BusinessDossier | null,
   ): Promise<void>;
 }
 
@@ -41,21 +45,25 @@ export const jsonLeadStore: OpportunityLeadStore = {
   async get(leadId: string) {
     return getLeads().find((lead) => lead.place_id === leadId);
   },
-  async save(leadId, evidence, summary) {
+  async save(leadId, evidence, summary, dossier) {
     await mutateLeads((leads) => {
       const target = leads.find((lead) => lead.place_id === leadId);
       if (!target) return;
       target.evidence = mergeEvidence(target.evidence, evidence);
       if (summary !== undefined) target.opportunity = summary;
+      if (dossier) target.dossier = dossier;
     });
   },
 };
 
 export interface AnalyzeOpportunityOptions {
+  /** Omite por completo el descubrimiento digital (no hace ninguna consulta). */
   skipEnrichment?: boolean;
+  /** Ignora el dossier guardado y vuelve a consultar las fuentes. */
+  forceRefresh?: boolean;
   skipJev?: boolean;
   skipAnalysis?: boolean;
-  enrichment?: EnrichmentOptions;
+  discovery?: DiscoveryOptions;
   jev?: JevOptions;
   analysis?: { settings?: LLMSettings };
   store?: OpportunityLeadStore;
@@ -101,47 +109,76 @@ async function runOpportunityAnalysis(
   const started = Date.now();
   const store = options.store || jsonLeadStore;
   const errors: string[] = [];
+  const existingEvidence = lead.evidence || [];
+
   const result: OpportunityResult = {
     ok: true,
     stage: "enrichment",
     leadId: lead.place_id,
     identity: lead.identity,
     durationMs: 0,
-    enrichment: { checkedUrls: [], evidenceAdded: 0, errors: [], skipped: false },
-    evidence: lead.evidence || [],
+    enrichment: { checkedUrls: [], evidenceAdded: 0, errors: [], skipped: Boolean(options.skipEnrichment) },
+    evidence: existingEvidence,
   };
 
-  // 1) Enriquecimiento (solo datos públicos del sitio ya declarado).
-  const enrichment = await enrichLead(lead, lead.evidence, {
-    ...options.enrichment,
-    skipFetch: options.skipEnrichment || options.enrichment?.skipFetch,
-  });
-  result.enrichment = {
-    checkedUrls: enrichment.checkedUrls,
-    evidenceAdded: enrichment.evidence.length,
-    errors: enrichment.errors,
-    skipped: enrichment.skipped,
-  };
-  result.evidence = mergeEvidence(lead.evidence, enrichment.evidence);
-  errors.push(...enrichment.errors);
+  let evidence = existingEvidence;
+  let dossier: BusinessDossier | null = lead.dossier ?? null;
+  let coverageBefore = evidenceCoverage(existingEvidence, DEFAULT_EVALUATED_FIELDS);
+  let coverageAfter = coverageBefore;
+  let discoverySummary: DiscoverySummary | undefined;
 
-  // Se guarda la evidencia antes de las llamadas de IA: si algo falla después,
-  // el trabajo de enriquecimiento no se pierde.
-  try {
-    await store.save(lead.place_id, result.evidence);
-  } catch (error) {
-    errors.push(
-      `No se pudo guardar la evidencia: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  // 1) Descubrimiento digital (antes de cualquier decisión).
+  // Con skipEnrichment no se consulta ninguna fuente externa: se ordena la
+  // evidencia que ya tenía el prospecto (sin red) y se deja todo lo demás
+  // como no buscado.
+  {
+    const discovery = await discoverBusinessPresence(lead, {
+      ...options.discovery,
+      forceRefresh: options.forceRefresh || options.discovery?.forceRefresh,
+      ...(options.skipEnrichment
+        ? { skipGoogle: true, skipWebsite: true, skipWebSearch: true }
+        : {}),
+    });
+    evidence = discovery.evidence;
+    dossier = discovery.dossier;
+    coverageBefore = discovery.summary.coverageBefore;
+    coverageAfter = discovery.summary.coverageAfter;
+    discoverySummary = discovery.summary;
+
+    const enrichment: EnrichmentSummary = {
+      checkedUrls: discovery.dossier.website.checkedUrls,
+      evidenceAdded: Math.max(0, evidence.length - existingEvidence.length),
+      errors: discovery.summary.sourcesFailed.map(
+        (item) => `${item.source}: ${item.error}`,
+      ),
+      skipped: Boolean(options.skipEnrichment),
+    };
+    result.enrichment = enrichment;
+    errors.push(...enrichment.errors);
+    result.discovery = discoverySummary;
+    result.dossier = dossier;
+    result.coverageBefore = coverageBefore;
+    result.coverageAfter = coverageAfter;
+
+    // Se guarda antes de las llamadas de IA: si algo falla después, el trabajo
+    // de descubrimiento no se pierde.
+    try {
+      await store.save(lead.place_id, evidence, undefined, dossier);
+    } catch (error) {
+      errors.push(
+        `No se pudo guardar la evidencia: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
-  const signals = buildOpportunitySignals(lead, result.evidence);
+  result.evidence = evidence;
+  const signals = buildOpportunitySignals(lead, evidence, dossier);
   result.signals = signals;
 
-  // 2) Jev: motor rápido de decisión.
+  // 2) Jev: motor rápido de decisión (mismas preguntas y umbrales).
   let jev: JevDecision | undefined;
   if (!options.skipJev) {
-    jev = await askJev(signals, result.evidence, options.jev);
+    jev = await askJev(signals, evidence, { ...options.jev, dossier });
     result.jev = jev;
     if (!jev.ok && jev.error) errors.push(jev.error);
   }
@@ -150,24 +187,21 @@ async function runOpportunityAnalysis(
   const jevFailed = Boolean(!options.skipJev && jev && !jev.ok);
 
   if (jev?.ok && jev.routing === "discard") {
-    // Jev descartó el prospecto: no se gasta análisis profundo.
     result.stage = "jev";
     result.ok = true;
   } else if (jevFailed) {
-    // Jev estaba configurado y no pudo decidir: se corta y se informa el motivo.
-    // Para analizar sin clasificador, volver a ejecutar con skipJev.
     result.stage = "jev";
     result.ok = false;
   } else {
-    // 3) DeepSeek: análisis comercial profundo.
     if (!options.skipAnalysis) {
       analysis = await analyzeWithDeepSeek(
         {
           lead,
-          evidence: result.evidence,
+          evidence,
           signals,
           jev,
           seller: options.seller || resolveSellerContext(),
+          dossier,
         },
         options.analysis,
       );
@@ -193,7 +227,7 @@ async function runOpportunityAnalysis(
   };
 
   try {
-    await store.save(lead.place_id, result.evidence, summary);
+    await store.save(lead.place_id, evidence, summary, dossier);
   } catch (error) {
     errors.push(
       `No se pudo guardar el resumen del análisis: ${error instanceof Error ? error.message : String(error)}`,
@@ -240,6 +274,7 @@ async function runOpportunityAnalysis(
           evidenceCoverage: analysis.evidenceCoverage,
         }
       : undefined,
+    discovery: discoverySummary,
     finalStage: result.stage,
     errors,
     durationMs: result.durationMs,

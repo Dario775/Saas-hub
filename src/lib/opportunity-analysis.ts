@@ -1,8 +1,26 @@
 import type { EvidenceField, LeadEvidence } from "./lead-evidence";
-import { evidenceCoverage, fieldStatus, renderEvidenceLines } from "./lead-evidence";
+import {
+  DEFAULT_EVALUATED_FIELDS,
+  evidenceCoverage,
+  fieldStatus,
+  renderEvidenceLines,
+} from "./lead-evidence";
 import type { LLMSettings } from "./llm";
 import { queryLLM, resolveLLMConfig } from "./llm";
-import type { JevDecision, OpportunityAnalysis, OpportunitySignals } from "./opportunity-types";
+import type {
+  BusinessDossier,
+  JevDecision,
+  OpportunityAnalysis,
+  OpportunitySignals,
+} from "./opportunity-types";
+
+/**
+ * Análisis comercial profundo con DeepSeek.
+ *
+ * En la Fase 3 solo cambió lo que recibe: además de la evidencia, se le pasa
+ * el dossier digital de forma estructurada. Las reglas del prompt y el
+ * esquema de salida siguen siendo los mismos.
+ */
 
 /** Productos y servicios que hoy podemos ofrecer. Sin precios inventados. */
 export const PRODUCT_CATALOG = [
@@ -45,18 +63,7 @@ export const PRODUCT_CATALOG = [
 ] as const;
 
 /** Campos que se evalúan para medir cobertura de evidencia. */
-export const ANALYZED_FIELDS: EvidenceField[] = [
-  "website",
-  "phone",
-  "email",
-  "instagram",
-  "facebook",
-  "whatsapp",
-  "ecommerce",
-  "catalog",
-  "category",
-  "address",
-];
+export const ANALYZED_FIELDS: EvidenceField[] = DEFAULT_EVALUATED_FIELDS;
 
 export interface AnalysisLeadLike {
   nombre?: string;
@@ -77,6 +84,8 @@ export interface AnalysisInput {
   signals?: OpportunitySignals;
   jev?: JevDecision;
   seller?: { brandName?: string; valueProposition?: string };
+  /** Dossier digital de la Fase 3 (opcional para no romper consumidores previos). */
+  dossier?: BusinessDossier | null;
 }
 
 const ALLOWED_FIELDS = new Set<string>(ANALYZED_FIELDS);
@@ -97,7 +106,7 @@ Reglas obligatorias:
 "recommendedProducts" solo puede contener ids de la lista de productos que se te entrega.`;
 
 export function buildAnalysisUserPrompt(input: AnalysisInput): string {
-  const { lead, evidence, signals, jev, seller } = input;
+  const { lead, evidence, signals, jev, seller, dossier } = input;
   const lines: string[] = [];
   lines.push("COMERCIO:");
   lines.push(`- Nombre: ${lead.nombre || "(sin nombre)"}`);
@@ -110,6 +119,33 @@ export function buildAnalysisUserPrompt(input: AnalysisInput): string {
   const evidenceLines = renderEvidenceLines(evidence);
   lines.push(evidenceLines.length ? evidenceLines.join("\n") : "- (sin evidencia registrada)");
   lines.push("");
+  if (dossier) {
+    lines.push("DOSSIER DIGITAL (resultado del descubrimiento previo; los estados importan):");
+    lines.push(
+      JSON.stringify(
+        {
+          identidad: dossier.identity,
+          sitio: dossier.website,
+          contactos: dossier.contacts,
+          redes: dossier.social,
+          comercio: dossier.commerce,
+          google: dossier.google,
+          fuentesConsultadas: dossier.sourcesConsulted,
+          fuentesNoDisponibles: dossier.sourcesUnavailable,
+          cobertura: {
+            respaldados: dossier.coverage.supported,
+            total: dossier.coverage.total,
+            buscados: dossier.coverage.searched,
+            noBuscados: dossier.coverage.notSearched,
+            noEncontrados: dossier.coverage.notFound,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    lines.push("");
+  }
   if (signals) {
     lines.push("SEÑALES ESTRUCTURADAS:");
     lines.push(JSON.stringify(signals, null, 2));

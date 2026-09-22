@@ -8,11 +8,19 @@ import type { EnrichmentSummary } from "./opportunity-types";
  *
  * Reglas de esta fase: nada de crawling masivo, nada de evadir bloqueos,
  * nada de sesiones ni cuentas. Solo se consulta el sitio que el prospecto
- * ya declara, con timeout y límite de tamaño de `public-fetch`.
+ * ya declara (máximo 3 páginas), con timeout y límite de tamaño de
+ * `public-fetch`, que además bloquea direcciones privadas.
  */
+
+export type EnrichmentFetcher = (
+  url: string,
+  maxBytes?: number,
+  redirects?: number,
+) => Promise<{ body: Buffer; contentType: string; finalUrl?: string }>;
 
 export interface EnrichmentFindings {
   emails: string[];
+  phones: string[];
   instagram: string[];
   facebook: string[];
   whatsapp: string[];
@@ -21,6 +29,15 @@ export interface EnrichmentFindings {
   catalog: boolean;
   contactForm: boolean;
   commerceMarkers: string[];
+  structuredDataTypes: string[];
+}
+
+export interface EnrichmentWebsiteInfo {
+  reachable: boolean;
+  finalUrl?: string;
+  title?: string;
+  description?: string;
+  checkedUrls: string[];
 }
 
 export interface LeadEnrichmentResult extends EnrichmentSummary {
@@ -28,6 +45,8 @@ export interface LeadEnrichmentResult extends EnrichmentSummary {
   pagesFetched: string[];
   /** Evidencia nueva aportada por el enriquecimiento (no reemplaza la anterior). */
   evidence: LeadEvidence[];
+  /** Datos de presentación del sitio, para el dossier. */
+  website: EnrichmentWebsiteInfo;
 }
 
 export interface EnrichmentOptions {
@@ -38,7 +57,9 @@ export interface EnrichmentOptions {
   maxBytes?: number;
   /** Presupuesto total para este prospecto. */
   deadlineMs?: number;
-  fetchImpl?: typeof fetchPublic;
+  /** Alias de deadlineMs, usado por Business Discovery. */
+  timeoutMs?: number;
+  fetchImpl?: EnrichmentFetcher;
   consultedSources?: string[];
   pauseMs?: number;
 }
@@ -71,7 +92,7 @@ const EMAIL_JUNK = [
   "@3x",
 ];
 
-const CONTACT_ROUTES = ["", "/contacto", "/contact"];
+const CONTACT_ROUTES = ["", "/contacto", "/contact", "/nosotros"];
 
 const ECOMMERCE_MARKERS = [
   "add-to-cart",
@@ -80,6 +101,7 @@ const ECOMMERCE_MARKERS = [
   "woocommerce",
   "shopify",
   "tiendanube",
+  "mercado shops",
   "mercadolibre",
   "prestashop",
   "checkout",
@@ -98,13 +120,14 @@ const CATALOG_MARKERS = [
   "medios de pago",
 ];
 
-const SOCIAL_PATTERNS: { field: EvidenceField; label: string; pattern: RegExp }[] = [
-  { field: "instagram", label: "instagram", pattern: /https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\/-]{2,60}/gi },
-  { field: "facebook", label: "facebook", pattern: /https?:\/\/(?:www\.)?facebook\.com\/[A-Za-z0-9_.\/-]{2,80}/gi },
-  { field: "whatsapp", label: "whatsapp", pattern: /https?:\/\/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/[A-Za-z0-9_.?=&%\/-]{4,120}/gi },
+const SOCIAL_PATTERNS: { field: EvidenceField; pattern: RegExp }[] = [
+  { field: "instagram", pattern: /https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\/-]{2,60}/gi },
+  { field: "facebook", pattern: /https?:\/\/(?:www\.)?facebook\.com\/[A-Za-z0-9_.\/-]{2,80}/gi },
+  { field: "whatsapp", pattern: /https?:\/\/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/[A-Za-z0-9_.?=&%\/-]{4,120}/gi },
 ];
 
-const OTHER_SOCIAL_PATTERN = /https?:\/\/(?:www\.)?(?:tiktok\.com|linkedin\.com|youtube\.com|x\.com|twitter\.com)\/[A-Za-z0-9_.\/?=&%-]{2,80}/gi;
+const OTHER_SOCIAL_PATTERN =
+  /https?:\/\/(?:www\.)?(?:tiktok\.com|linkedin\.com|youtube\.com|youtu\.be|x\.com|twitter\.com)\/[A-Za-z0-9_.\/?=&%-]{2,80}/gi;
 
 /** Normaliza un sitio declarado a una URL http(s) utilizable. */
 export function normalizeWebsiteUrl(raw?: string | null): string {
@@ -151,33 +174,77 @@ export function extractSocialLinks(html: string): {
   };
 }
 
+/** Teléfonos publicados en enlaces tel: del sitio. */
+export function extractPhones(html: string): string[] {
+  const found = html.match(/href=["']tel:([^"']+)["']/gi) || [];
+  const clean = new Set<string>();
+  for (const raw of found) {
+    const value = raw.replace(/^href=["']tel:/i, "").replace(/["']$/, "").trim();
+    if (value) clean.add(value);
+  }
+  return [...clean];
+}
+
+export function extractTitle(html: string): string | undefined {
+  const match = html.match(/<title[^>]*>([\s\S]{0,200}?)<\/title>/i);
+  const value = match ? match[1].replace(/\s+/g, " ").trim() : "";
+  return value || undefined;
+}
+
+export function extractDescription(html: string): string | undefined {
+  const match =
+    html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{0,300})["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']{0,300})["'][^>]+name=["']description["']/i);
+  const value = match ? match[1].replace(/\s+/g, " ").trim() : "";
+  return value || undefined;
+}
+
+/** Tipos de datos estructurados (schema.org) presentes en la página. */
+export function extractStructuredDataTypes(html: string): string[] {
+  const blocks = html.match(/<script[^>]+application\/ld\+json[^>]*>[\s\S]{0,4000}?<\/script>/gi) || [];
+  const types = new Set<string>();
+  for (const block of blocks) {
+    const matches = block.match(/"@type"\s*:\s*"([A-Za-z]+)"/g) || [];
+    for (const item of matches) {
+      const type = item.split(":")[1]?.replace(/["\s]/g, "");
+      if (type) types.add(type);
+    }
+  }
+  return [...types].slice(0, 12);
+}
+
 export function detectCommerceSignals(html: string): {
   ecommerce: boolean;
   catalog: boolean;
   contactForm: boolean;
   markers: string[];
+  structuredDataTypes: string[];
 } {
   const lower = html.toLowerCase();
   const commerceMarkers = ECOMMERCE_MARKERS.filter((marker) => lower.includes(marker));
   const catalogMarkers = CATALOG_MARKERS.filter((marker) => lower.includes(marker));
+  const structuredDataTypes = extractStructuredDataTypes(html);
+  const structuredCommerce = structuredDataTypes.some((type) =>
+    ["Product", "Offer", "AggregateOffer", "ItemList"].includes(type),
+  );
+  const structuredStore = structuredDataTypes.some((type) =>
+    ["Store", "OnlineStore", "LocalBusiness"].includes(type),
+  );
   const contactForm =
     /<form/i.test(html) && /(contacto|contact|escribinos|consulta)/i.test(html);
   return {
-    ecommerce: commerceMarkers.length > 0,
-    catalog: catalogMarkers.length > 0,
+    ecommerce: commerceMarkers.length > 0 || structuredCommerce,
+    catalog: catalogMarkers.length > 0 || structuredDataTypes.includes("ItemList") || structuredStore,
     contactForm,
-    markers: [...commerceMarkers, ...catalogMarkers].slice(0, 8),
+    markers: [...commerceMarkers, ...catalogMarkers, ...structuredDataTypes].slice(0, 10),
+    structuredDataTypes,
   };
-}
-
-function extractTelephone(html: string): string {
-  const telLink = html.match(/href=["']tel:([^"']+)["']/i);
-  return telLink ? telLink[1].trim() : "";
 }
 
 function emptyFindings(): EnrichmentFindings {
   return {
     emails: [],
+    phones: [],
     instagram: [],
     facebook: [],
     whatsapp: [],
@@ -186,6 +253,7 @@ function emptyFindings(): EnrichmentFindings {
     catalog: false,
     contactForm: false,
     commerceMarkers: [],
+    structuredDataTypes: [],
   };
 }
 
@@ -209,8 +277,10 @@ export async function enrichLead(
   const checkedUrls: string[] = [];
   const findings = emptyFindings();
   const websiteUrl = normalizeWebsiteUrl(lead.website);
+  const website: EnrichmentWebsiteInfo = { reachable: false, checkedUrls };
 
   if (options.skipFetch) {
+    website.checkedUrls = checkedUrls;
     evidence.push(
       makeEvidence({
         field: "website",
@@ -227,10 +297,12 @@ export async function enrichLead(
       errors,
       findings,
       evidence,
+      website,
     };
   }
 
   if (!websiteUrl) {
+    website.checkedUrls = checkedUrls;
     evidence.push(
       makeEvidence({
         field: "website",
@@ -247,14 +319,14 @@ export async function enrichLead(
       errors,
       findings,
       evidence,
+      website,
     };
   }
 
-  const deadline = Date.now() + (options.deadlineMs ?? 25_000);
-  const maxPages = Math.max(1, Math.min(options.maxPages ?? 2, 3));
-  const fetchImpl = options.fetchImpl || fetchPublic;
+  const deadline = Date.now() + (options.timeoutMs ?? options.deadlineMs ?? 25_000);
+  const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 4));
+  const fetchImpl: EnrichmentFetcher = options.fetchImpl || fetchPublic;
   const pauseMs = options.pauseMs ?? 250;
-  let homepageHtml = "";
 
   for (const route of CONTACT_ROUTES.slice(0, maxPages)) {
     if (Date.now() > deadline) {
@@ -266,14 +338,17 @@ export async function enrichLead(
     try {
       const result = await fetchImpl(url, options.maxBytes ?? 1_500_000);
       const html = result.body.toString("utf8");
-      if (!homepageHtml) homepageHtml = html;
       pagesFetched.push(url);
       if (route === "") {
+        website.reachable = true;
+        website.finalUrl = result.finalUrl || url;
+        website.title = extractTitle(html);
+        website.description = extractDescription(html);
         evidence.push(
           makeEvidence({
             field: "website",
             status: "verified",
-            value: websiteUrl,
+            value: website.finalUrl || websiteUrl,
             source: "website",
             sourceUrl: url,
             notes: "El sitio declarado respondió correctamente.",
@@ -283,7 +358,7 @@ export async function enrichLead(
       const socials = extractSocialLinks(html);
       const commerce = detectCommerceSignals(html);
       const emails = extractEmails(html);
-      const telephone = extractTelephone(html);
+      const phones = extractPhones(html);
 
       for (const [field, values] of [
         ["instagram", socials.instagram],
@@ -322,17 +397,18 @@ export async function enrichLead(
         );
         findings.emails.push(email);
       }
-      if (telephone && !(lead.telefono || "").trim()) {
+      for (const phone of phones) {
         evidence.push(
           makeEvidence({
             field: "phone",
             status: "found",
-            value: telephone,
+            value: phone,
             source: "website",
             sourceUrl: url,
             notes: "Teléfono publicado en el sitio.",
           }),
         );
+        findings.phones.push(phone);
       }
       if (commerce.ecommerce) {
         evidence.push(
@@ -343,7 +419,7 @@ export async function enrichLead(
             source: "website",
             sourceUrl: url,
             confidence: 0.6,
-            notes: `Señales de tienda online: ${commerce.markers.join(", ")}`,
+            notes: `Señales: ${commerce.markers.join(", ")}`,
           }),
         );
         findings.ecommerce = true;
@@ -357,21 +433,37 @@ export async function enrichLead(
             source: "website",
             sourceUrl: url,
             confidence: 0.6,
-            notes: "Señales de catálogo o listado de productos.",
+            notes: `Señales: ${commerce.markers.join(", ")}`,
           }),
         );
         findings.catalog = true;
       }
-      findings.contactForm = findings.contactForm || commerce.contactForm;
+      if (commerce.contactForm) {
+        evidence.push(
+          makeEvidence({
+            field: "contact_form",
+            status: "found",
+            value: url,
+            source: "website",
+            sourceUrl: url,
+            notes: "Formulario de contacto detectado.",
+          }),
+        );
+        findings.contactForm = true;
+      }
       findings.commerceMarkers = [...new Set([...findings.commerceMarkers, ...commerce.markers])];
+      findings.structuredDataTypes = [
+        ...new Set([...findings.structuredDataTypes, ...commerce.structuredDataTypes]),
+      ];
 
       const foundSomething =
-        emails.length > 0 || socials.instagram.length > 0 || socials.facebook.length > 0;
+        emails.length > 0 ||
+        phones.length > 0 ||
+        socials.instagram.length > 0 ||
+        socials.facebook.length > 0;
       if (foundSomething && route !== "") break;
     } catch (error) {
-      errors.push(
-        `${url}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      errors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
@@ -388,10 +480,9 @@ export async function enrichLead(
         notes: "El sitio está declarado pero no se pudo abrir; no se afirma nada sobre su contenido.",
       }),
     );
-  } else if (!homepageHtml.trim()) {
-    errors.push("El sitio respondió pero sin contenido analizable.");
   }
 
+  website.checkedUrls = checkedUrls;
   return {
     skipped: false,
     checkedUrls,
@@ -400,5 +491,6 @@ export async function enrichLead(
     errors,
     findings,
     evidence,
+    website,
   };
 }

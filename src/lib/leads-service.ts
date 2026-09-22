@@ -3,7 +3,7 @@ import path from "path";
 import { readJson,withFileLock,writeJson } from "./json-store";
 import { leadIdentity } from "./lead-identity";
 import type { LeadEvidence } from "./lead-evidence";
-import type { OpportunitySummary } from "./opportunity-types";
+import type { BusinessDossier, OpportunitySummary } from "./opportunity-types";
 
 export type LeadStatus = "nuevo" | "contactado" | "respondio" | "demo" | "cliente" | "descartado";
 
@@ -35,6 +35,8 @@ export interface LeadItem {
   evidence?: LeadEvidence[];
   /** Resumen del último análisis de oportunidad (sin el detalle completo). */
   opportunity?: OpportunitySummary | null;
+  /** Dossier del descubrimiento digital; se reutiliza mientras siga fresco. */
+  dossier?: BusinessDossier | null;
 }
 
 export interface LeadCrmData {
@@ -235,6 +237,7 @@ export function getLeads(): LeadItem[] {
         }),
       evidence: Array.isArray(l.evidence) ? l.evidence : undefined,
       opportunity: l.opportunity ?? null,
+      dossier: l.dossier ?? null,
     };
     leadItem.whatsappLink = buildWhatsAppLink(leadItem);
     return leadItem;
@@ -272,6 +275,7 @@ export function saveLeads(leads: LeadItem[]): void {
     batch: l.batch, searchDate: l.searchDate, status: l.status, notes: l.notes,
     customPitch: l.customPitch, lastContactedAt: l.lastContactedAt,
     identity: l.identity, evidence: l.evidence, opportunity: l.opportunity,
+    dossier: l.dossier,
   }));
   writeJson(LEADS_JSON_PATH, rawList);
 

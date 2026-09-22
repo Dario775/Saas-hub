@@ -98,6 +98,61 @@ const STATUS_CONFIG: Record<LeadStatus, { label: string; color: string; badgeCla
   },
 };
 
+/** Presentación legible: se separa de los valores internos (no se tocan). */
+const FIELD_LABELS_ES: Record<string, string> = {
+  identity: "Identidad",
+  name: "Nombre",
+  category: "Rubro",
+  address: "Dirección",
+  zone: "Zona",
+  website: "Sitio web",
+  phone: "Teléfono",
+  email: "Email",
+  whatsapp: "WhatsApp",
+  contact_form: "Formulario de contacto",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  social: "Otras redes",
+  ecommerce: "Tienda online",
+  catalog: "Catálogo",
+  rating: "Puntuación pública",
+  opening_hours: "Horarios",
+};
+
+const SOURCE_LABELS_ES: Record<string, string> = {
+  openstreetmap: "OpenStreetMap",
+  google_places: "Google Places",
+  website: "Sitio web",
+  web_search: "Búsqueda web",
+  manual: "Manual",
+  derived: "Derivado",
+};
+
+const IDENTITY_LABELS: Record<string, string> = {
+  matched: "Coincide",
+  probable: "Probable",
+  ambiguous: "Ambigua",
+  rejected: "Descartada",
+};
+
+/** ✓ encontrado/verificado · ? desconocido · ○ no buscado · ✗ buscado sin resultado · ⚠ conflictivo */
+const STATUS_META: Record<string, { icon: string; label: string }> = {
+  verified: { icon: "✓", label: "Verificado" },
+  found: { icon: "✓", label: "Encontrado" },
+  inferred: { icon: "?", label: "Inferido" },
+  unknown: { icon: "?", label: "Desconocido" },
+  not_searched: { icon: "○", label: "No buscado" },
+  not_found: { icon: "✗", label: "Buscado, no encontrado" },
+  conflicting: { icon: "⚠", label: "En conflicto" },
+};
+
+function identityStatusToDataStatus(status: string): string {
+  if (status === "matched") return "verified";
+  if (status === "probable") return "found";
+  if (status === "ambiguous") return "conflicting";
+  return "not_found";
+}
+
 const SUGGESTED_RUBROS = [
   "Ferretería",
   "Gimnasio",
@@ -1528,7 +1583,226 @@ ${demoUrl}
 
                 <section className="space-y-1">
                   <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Evidencias encontradas
+                    Identidad digital
+                  </h4>
+                  {analysisResult.dossier?.identity ? (
+                    <p className="text-slate-300">
+                      {STATUS_META[identityStatusToDataStatus(analysisResult.dossier.identity.status)].icon}{" "}
+                      {IDENTITY_LABELS[analysisResult.dossier.identity.status]} ·{" "}
+                      {analysisResult.dossier.identity.candidateName || "candidato sin nombre"} ·
+                      puntaje {analysisResult.dossier.identity.score} · confianza por reglas{" "}
+                      {analysisResult.dossier.identity.confidence}
+                      {analysisResult.dossier.identity.candidateUrl ? (
+                        <>
+                          {" · "}
+                          <a
+                            href={analysisResult.dossier.identity.candidateUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-400 hover:underline"
+                          >
+                            ver ficha
+                          </a>
+                        </>
+                      ) : null}
+                      {analysisResult.dossier.identity.matchedSignals.length ? (
+                        <>
+                          <br />
+                          <span className="text-[11px] text-slate-500">
+                            Coincide: {analysisResult.dossier.identity.matchedSignals.join(", ")}
+                          </span>
+                        </>
+                      ) : null}
+                      {analysisResult.dossier.identity.conflictingSignals.length ? (
+                        <>
+                          <br />
+                          <span className="text-[11px] text-amber-300">
+                            En conflicto: {analysisResult.dossier.identity.conflictingSignals.join(", ")}
+                          </span>
+                        </>
+                      ) : null}
+                    </p>
+                  ) : (
+                    <p className="text-slate-500">
+                      No se correlacionó identidad con ninguna fuente externa.
+                    </p>
+                  )}
+                  {analysisResult.discovery?.conflicts?.length ? (
+                    <p className="text-[11px] text-amber-300">
+                      Conflictos detectados: {analysisResult.discovery.conflicts.join(" | ")}
+                    </p>
+                  ) : null}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Fuentes consultadas
+                  </h4>
+                  <p className="text-slate-400">
+                    {analysisResult.discovery?.sourcesSucceeded?.length
+                      ? analysisResult.discovery.sourcesSucceeded.join(", ")
+                      : "ninguna"}
+                  </p>
+                  {analysisResult.discovery?.sourcesFailed?.length ? (
+                    <p className="text-[11px] text-amber-300">
+                      No disponibles:{" "}
+                      {analysisResult.discovery.sourcesFailed
+                        .map((item) => item.source + " (" + item.error + ")")
+                        .join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.cacheHit ? (
+                    <p className="text-[11px] text-slate-500">
+                      Dossier reutilizado de la caché (más reciente que el TTL).
+                    </p>
+                  ) : null}
+                </section>
+
+                {analysisResult.dossier ? (
+                  <>
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Sitio web
+                      </h4>
+                      <p className="text-slate-300">
+                        {STATUS_META[analysisResult.dossier.website.status].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.website.status].label}
+                        {analysisResult.dossier.website.url
+                          ? ": " + analysisResult.dossier.website.url
+                          : ""}
+                        {analysisResult.dossier.website.reachable === false
+                          ? " · no respondió"
+                          : ""}
+                      </p>
+                      {analysisResult.dossier.website.title ? (
+                        <p className="text-[11px] text-slate-500">
+                          Título: {analysisResult.dossier.website.title}
+                        </p>
+                      ) : null}
+                      {analysisResult.dossier.website.description ? (
+                        <p className="text-[11px] text-slate-500">
+                          Descripción: {analysisResult.dossier.website.description}
+                        </p>
+                      ) : null}
+                      {analysisResult.dossier.website.checkedUrls.length ? (
+                        <p className="text-[11px] text-slate-600">
+                          URLs revisadas: {analysisResult.dossier.website.checkedUrls.join(", ")}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Contacto
+                      </h4>
+                      <p className="text-slate-300">
+                        Teléfonos: {analysisResult.dossier.contacts.phones.join(", ") || "—"}
+                        <br />
+                        WhatsApp: {analysisResult.dossier.contacts.whatsapp.join(", ") || "—"}
+                        <br />
+                        Emails: {analysisResult.dossier.contacts.emails.join(", ") || "—"}
+                        <br />
+                        Formularios: {analysisResult.dossier.contacts.contactForms.length ? "sí" : "no detectado"}
+                      </p>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Redes sociales
+                      </h4>
+                      <p className="text-slate-300">
+                        Instagram: {analysisResult.dossier.social.instagram.join(", ") || "—"}
+                        <br />
+                        Facebook: {analysisResult.dossier.social.facebook.join(", ") || "—"}
+                        <br />
+                        TikTok / LinkedIn / YouTube:{" "}
+                        {[
+                          ...analysisResult.dossier.social.tiktok,
+                          ...analysisResult.dossier.social.linkedin,
+                          ...analysisResult.dossier.social.youtube,
+                        ].join(", ") || "—"}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Un perfil encontrado no implica actividad verificada.
+                      </p>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Ecommerce y catálogo
+                      </h4>
+                      <p className="text-slate-300">
+                        Tienda online: {STATUS_META[analysisResult.dossier.commerce.ecommerce].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.ecommerce].label} · Catálogo:{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.catalog].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.catalog].label}
+                      </p>
+                      {analysisResult.dossier.commerce.markers.length ? (
+                        <p className="text-[11px] text-slate-600">
+                          Señales: {analysisResult.dossier.commerce.markers.join(", ")}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    {analysisResult.dossier.google ? (
+                      <section className="space-y-1">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          Google Places
+                        </h4>
+                        <p className="text-slate-300">
+                          {analysisResult.dossier.google.placeId
+                            ? "Coincidencia: " + analysisResult.dossier.google.placeId
+                            : "Sin coincidencia confirmada"}
+                          {analysisResult.dossier.google.rating !== undefined
+                            ? " · puntuación " +
+                              analysisResult.dossier.google.rating +
+                              (analysisResult.dossier.google.ratingCount !== undefined
+                                ? " (" + analysisResult.dossier.google.ratingCount + " reseñas)"
+                                : "")
+                            : " · sin puntuación informada"}
+                          {analysisResult.dossier.google.businessStatus
+                            ? " · " + analysisResult.dossier.google.businessStatus
+                            : ""}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          Candidatos evaluados: {analysisResult.dossier.google.candidatesFound}
+                        </p>
+                      </section>
+                    ) : null}
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Cobertura de evidencia
+                      </h4>
+                      <p className="text-slate-300">
+                        {analysisResult.dossier.coverage.supported}/
+                        {analysisResult.dossier.coverage.total} campos respaldados (
+                        {analysisResult.dossier.coverage.score})
+                        {analysisResult.coverageBefore ? (
+                          <>
+                            {" · antes del descubrimiento: "}
+                            {analysisResult.coverageBefore.supported}/
+                            {analysisResult.coverageBefore.total}
+                          </>
+                        ) : null}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Buscados: {analysisResult.dossier.coverage.searched} · no buscados:{" "}
+                        {analysisResult.dossier.coverage.notSearched} · buscados sin resultado:{" "}
+                        {analysisResult.dossier.coverage.notFound} · inferidos:{" "}
+                        {analysisResult.dossier.coverage.inferred} · en conflicto:{" "}
+                        {analysisResult.dossier.coverage.conflicting}
+                      </p>
+                      <p className="text-[10px] text-slate-600">
+                        {analysisResult.dossier.coverage.formula}
+                      </p>
+                    </section>
+                  </>
+                ) : null}
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Evidencias
                   </h4>
                   {analysisResult.evidence.length === 0 ? (
                     <p className="text-slate-500">Sin evidencia registrada todavía.</p>
@@ -1539,24 +1813,29 @@ ${demoUrl}
                           key={item.field + "-" + item.status + "-" + index}
                           className="flex items-start gap-2"
                         >
-                          <Badge
-                            variant="outline"
-                            className="text-[9px] px-1 py-0 bg-white/[0.03] border-white/10 text-slate-300 shrink-0"
+                          <span
+                            className="shrink-0 font-mono text-[11px] w-4 text-center"
+                            title={STATUS_META[item.status].label}
                           >
-                            {item.status}
-                          </Badge>
+                            {STATUS_META[item.status].icon}
+                          </span>
                           <span className="text-slate-300">
-                            <strong className="text-slate-200">{item.field}</strong>
-                            {item.value ? ": " + String(item.value).slice(0, 70) : ""}
+                            <strong className="text-slate-200">{FIELD_LABELS_ES[item.field] || item.field}</strong>
+                            {" — "}
+                            <span className="text-slate-400">{STATUS_META[item.status].label}</span>
+                            {item.value !== undefined && item.value !== null && item.value !== ""
+                              ? ": " + String(item.value).slice(0, 80)
+                              : ""}
                             <span className="text-slate-500">
                               {" · "}
-                              {item.source}
-                              {item.sourceUrl
-                                ? " · " + item.sourceUrl.slice(0, 60)
-                                : ""}
+                              {SOURCE_LABELS_ES[item.source] || item.source}
+                              {item.sourceUrl ? " · " + item.sourceUrl.slice(0, 60) : ""}
                               {" · confianza "}
                               {item.confidence}
                             </span>
+                            {item.notes ? (
+                              <span className="text-slate-600"> · {item.notes}</span>
+                            ) : null}
                           </span>
                         </li>
                       ))}

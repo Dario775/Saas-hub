@@ -2,8 +2,8 @@
  * Evidencias de un prospecto.
  *
  * Cada dato relevante para decidir guarda de dónde salió y con qué estado.
- * El sistema nunca presenta una inferencia como hecho ni afirma que algo
- * "no existe": como mucho dice que no se encontró en las fuentes consultadas.
+ * El sistema nunca presenta una inferencia como hecho ni afirma ausencia:
+ * distingue "no se buscó" de "se buscó y no apareció" y marca los conflictos.
  */
 
 export type DataStatus =
@@ -18,9 +18,12 @@ export type DataStatus =
   /** Hay dato pero no sabemos de dónde viene o está incompleto. */
   | "unknown"
   /** Todavía no se buscó. No autoriza a afirmar ausencia. */
-  | "not_searched";
+  | "not_searched"
+  /** Las fuentes consultadas se contradicen o la identidad es ambigua. */
+  | "conflicting";
 
 export type EvidenceField =
+  | "identity"
   | "name"
   | "category"
   | "address"
@@ -29,6 +32,7 @@ export type EvidenceField =
   | "phone"
   | "email"
   | "whatsapp"
+  | "contact_form"
   | "instagram"
   | "facebook"
   | "social"
@@ -41,6 +45,7 @@ export type EvidenceSource =
   | "openstreetmap"
   | "google_places"
   | "website"
+  | "web_search"
   | "manual"
   | "derived";
 
@@ -64,32 +69,71 @@ const DEFAULT_CONFIDENCE: Record<DataStatus, number> = {
   verified: 1,
   found: 0.9,
   inferred: 0.6,
+  conflicting: 0.2,
   not_found: 0.7,
   unknown: 0.3,
   not_searched: 0,
 };
 
 const STATUS_RANK: Record<DataStatus, number> = {
-  verified: 5,
-  found: 4,
+  verified: 6,
+  found: 5,
+  conflicting: 4,
   inferred: 3,
   not_found: 2,
   unknown: 1,
   not_searched: 0,
 };
 
+/** Campos que se evalúan al medir cobertura. Única fuente para todo el sistema. */
+export const DEFAULT_EVALUATED_FIELDS: EvidenceField[] = [
+  "website",
+  "phone",
+  "email",
+  "whatsapp",
+  "instagram",
+  "facebook",
+  "social",
+  "ecommerce",
+  "catalog",
+  "category",
+  "address",
+  "rating",
+];
+
 const FIELD_LABELS: Partial<Record<EvidenceField, string>> = {
+  identity: "identidad",
+  name: "nombre",
+  category: "rubro",
+  address: "dirección",
+  zone: "zona",
   website: "sitio web",
   phone: "teléfono",
   email: "email",
   whatsapp: "WhatsApp",
+  contact_form: "formulario de contacto",
   instagram: "Instagram",
   facebook: "Facebook",
-  social: "redes sociales",
+  social: "otras redes",
   ecommerce: "tienda online",
   catalog: "catálogo",
   rating: "puntuación pública",
+  opening_hours: "horarios",
 };
+
+export const STATUS_LABELS: Record<DataStatus, string> = {
+  verified: "Verificado",
+  found: "Encontrado",
+  inferred: "Inferido",
+  conflicting: "Conflictivo",
+  not_found: "Buscado, no encontrado",
+  unknown: "Desconocido",
+  not_searched: "No buscado",
+};
+
+export function fieldLabel(field: EvidenceField): string {
+  return FIELD_LABELS[field] || field;
+}
 
 export function defaultConfidence(status: DataStatus): number {
   return DEFAULT_CONFIDENCE[status];
@@ -131,12 +175,30 @@ export function supportedEvidence(
     .sort((a, b) => b.confidence - a.confidence)[0];
 }
 
-/** true solo si el dato está respaldado (no es inferencia ni ausencia). */
+/** true solo si el dato está respaldado (no es inferencia, ni ausencia, ni conflicto). */
 export function hasSupportedValue(
   evidence: LeadEvidence[] | undefined,
   field: EvidenceField,
 ): boolean {
   return Boolean(supportedEvidence(evidence, field));
+}
+
+/** Todos los valores respaldados de un campo (por ejemplo varios teléfonos). */
+export function supportedValues(
+  evidence: LeadEvidence[] | undefined,
+  field: EvidenceField,
+): string[] {
+  const values = (evidence || [])
+    .filter(
+      (item) =>
+        item.field === field &&
+        (item.status === "verified" || item.status === "found") &&
+        item.value !== undefined &&
+        item.value !== null &&
+        item.value !== "",
+    )
+    .map((item) => String(item.value));
+  return [...new Set(values)];
 }
 
 /** Suma evidencias sin duplicar (mismo campo, estado, valor y fuente). */
@@ -159,7 +221,7 @@ export function mergeEvidence(
 
 /**
  * Frase honesta sobre un campo. Nunca afirma que un dato no existe:
- * distingue "no encontramos" de "no se buscó".
+ * distingue "no encontramos" de "no se buscó" y avisa cuando hay conflicto.
  */
 export function describeFieldStatus(
   evidence: LeadEvidence[] | undefined,
@@ -167,9 +229,10 @@ export function describeFieldStatus(
   consulted: string[] = [],
 ): string {
   const status = fieldStatus(evidence, field);
-  const label = FIELD_LABELS[field] || field;
+  const label = fieldLabel(field);
   if (status === "verified" || status === "found") return `${label}: encontrado`;
   if (status === "inferred") return `${label}: inferido, sin confirmar`;
+  if (status === "conflicting") return `${label}: datos en conflicto, requiere revisión`;
   if (status === "unknown") return `${label}: sin datos`;
   if (status === "not_found") {
     return consulted.length
@@ -180,23 +243,30 @@ export function describeFieldStatus(
 }
 
 export interface EvidenceCoverage {
+  /** Respaldo: campos con evidencia verificada o encontrada / campos evaluados. */
   score: number;
   supported: number;
+  searched: number;
+  notFound: number;
+  notSearched: number;
+  inferred: number;
+  conflicting: number;
+  unknown: number;
   total: number;
   fields: Record<string, DataStatus>;
   formula: string;
 }
 
 const COVERAGE_FORMULA =
-  "score = campos con evidencia verificada o encontrada / campos evaluados";
+  "score = campos con evidencia verificada o encontrada / campos evaluados. searched = campos evaluados con alguna consulta (todo menos no buscado). No mide la calidad del negocio, solo cuánto sabemos.";
 
 /**
- * Cobertura de evidencia de un análisis.
+ * Cobertura de evidencia.
  *
  * Es una medida interna nuestra, no un valor que devuelva un modelo:
  * cuenta cuántos de los campos evaluados están respaldados por evidencia
- * (verified o found). Los campos inferidos, ausentes o no consultados
- * no suman, para no premiar conclusiones sin respaldo.
+ * (verified o found). Los campos inferidos, ausentes, conflictivos o no
+ * consultados no suman, para no premiar conclusiones sin respaldo.
  */
 export function evidenceCoverage(
   evidence: LeadEvidence[] | undefined,
@@ -204,14 +274,34 @@ export function evidenceCoverage(
 ): EvidenceCoverage {
   const statuses: Record<string, DataStatus> = {};
   let supported = 0;
+  let searched = 0;
+  let notFound = 0;
+  let notSearched = 0;
+  let inferred = 0;
+  let conflicting = 0;
+  let unknown = 0;
+
   for (const field of fields) {
     const status = fieldStatus(evidence, field);
     statuses[field] = status;
     if (status === "verified" || status === "found") supported += 1;
+    if (status !== "not_searched") searched += 1;
+    if (status === "not_found") notFound += 1;
+    if (status === "not_searched") notSearched += 1;
+    if (status === "inferred") inferred += 1;
+    if (status === "conflicting") conflicting += 1;
+    if (status === "unknown") unknown += 1;
   }
+
   return {
     score: fields.length ? Number((supported / fields.length).toFixed(2)) : 0,
     supported,
+    searched,
+    notFound,
+    notSearched,
+    inferred,
+    conflicting,
+    unknown,
     total: fields.length,
     fields: statuses,
     formula: COVERAGE_FORMULA,

@@ -38,7 +38,7 @@ export async function fetchPublic(
   urlString: string,
   maxBytes = 2_000_000,
   redirects = 3,
-): Promise<{ body: Buffer; contentType: string }> {
+): Promise<{ body: Buffer; contentType: string; finalUrl?: string }> {
   const url = new URL(urlString);
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -113,6 +113,7 @@ export async function fetchPublic(
             body: Buffer.concat(chunks),
             contentType:
               response.headers["content-type"] || "application/octet-stream",
+            finalUrl: url.href,
           });
         });
       },

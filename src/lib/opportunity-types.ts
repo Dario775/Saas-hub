@@ -1,4 +1,10 @@
-import type { DataStatus, EvidenceCoverage, EvidenceSource, LeadEvidence } from "./lead-evidence";
+import type {
+  DataStatus,
+  EvidenceCoverage,
+  EvidenceSource,
+  LeadEvidence,
+} from "./lead-evidence";
+import type { IdentityMatchStatus } from "./identity-match";
 
 /** Señales estructuradas derivadas de evidencia real, listas para un motor de decisión. */
 export interface OpportunitySignals {
@@ -26,6 +32,11 @@ export interface OpportunitySignals {
   evidenceCount: number;
   notSearched: string[];
   consultedSources: string[];
+  /** Agregados por la Fase 3 (opcionales para no romper consumidores previos). */
+  hasContactForm?: boolean;
+  hasAnySocialProfile?: boolean;
+  identityStatus?: IdentityMatchStatus | "sin_correlacionar";
+  identityConfidence?: number;
 }
 
 export interface JevChoiceAnswer {
@@ -63,6 +74,97 @@ export interface JevDecision {
   evidenceSufficient?: JevNoulAnswer;
   usage?: JevUsage;
   requestedAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Business dossier (Fase 3)                                           */
+/* ------------------------------------------------------------------ */
+
+export interface IdentityMatchSummary {
+  status: IdentityMatchStatus;
+  confidence: number;
+  score: number;
+  candidateName?: string;
+  candidateSource: EvidenceSource;
+  candidateUrl?: string;
+  matchedSignals: string[];
+  conflictingSignals: string[];
+}
+
+export interface DossierWebsiteBlock {
+  status: DataStatus;
+  url?: string;
+  reachable?: boolean;
+  finalUrl?: string;
+  title?: string;
+  description?: string;
+  checkedUrls: string[];
+}
+
+export interface DossierContactsBlock {
+  phones: string[];
+  whatsapp: string[];
+  emails: string[];
+  contactForms: string[];
+}
+
+export interface DossierSocialBlock {
+  instagram: string[];
+  facebook: string[];
+  tiktok: string[];
+  linkedin: string[];
+  youtube: string[];
+}
+
+export interface DossierCommerceBlock {
+  ecommerce: DataStatus;
+  catalog: DataStatus;
+  markers: string[];
+}
+
+export interface DossierGoogleBlock {
+  placeId?: string;
+  matchedPlaceId?: string;
+  rating?: number;
+  ratingCount?: number;
+  businessStatus?: string;
+  primaryType?: string;
+  mapsUri?: string;
+  candidatesFound: number;
+}
+
+export interface BusinessDossier {
+  leadId: string;
+  identity?: IdentityMatchSummary | null;
+  business: {
+    name: string;
+    category: string;
+    address: string;
+    coordinates?: { lat?: number; lon?: number };
+  };
+  website: DossierWebsiteBlock;
+  contacts: DossierContactsBlock;
+  social: DossierSocialBlock;
+  commerce: DossierCommerceBlock;
+  google?: DossierGoogleBlock;
+  evidence: LeadEvidence[];
+  sourcesConsulted: string[];
+  sourcesUnavailable: { source: string; error: string }[];
+  coverage: EvidenceCoverage;
+  generatedAt: string;
+  ttlMs: number;
+}
+
+export interface DiscoverySummary {
+  cacheHit: boolean;
+  durationMs: number;
+  sourcesAttempted: string[];
+  sourcesSucceeded: string[];
+  sourcesFailed: { source: string; error: string }[];
+  coverageBefore: EvidenceCoverage;
+  coverageAfter: EvidenceCoverage;
+  identity?: IdentityMatchSummary | null;
+  conflicts: string[];
 }
 
 export interface OpportunityAnalysis {
@@ -114,6 +216,11 @@ export interface OpportunityResult {
   jev?: JevDecision;
   analysis?: OpportunityAnalysis;
   logId?: string;
+  /** Fase 3 */
+  discovery?: DiscoverySummary;
+  dossier?: BusinessDossier;
+  coverageBefore?: EvidenceCoverage;
+  coverageAfter?: EvidenceCoverage;
 }
 
 export interface OpportunityLogRecord {
@@ -149,6 +256,8 @@ export interface OpportunityLogRecord {
     opportunityType?: string;
     evidenceCoverage?: EvidenceCoverage;
   };
+  /** Fase 3: descubrimiento digital previo a la decisión. */
+  discovery?: DiscoverySummary;
   finalStage: OpportunityResult["stage"];
   errors: string[];
   durationMs: number;

@@ -2,6 +2,7 @@ import { fetchWithRetry } from "./fetch-helper";
 import type { LeadEvidence } from "./lead-evidence";
 import { fieldStatus, renderEvidenceLines } from "./lead-evidence";
 import type {
+  BusinessDossier,
   JevChoiceAnswer,
   JevDecision,
   JevNoulAnswer,
@@ -18,7 +19,7 @@ import type {
  * https://jevtypesafeai.com/typesafe/docs (verificado contra la documentación):
  *
  *   POST https://jevtypesafeai.com/api/v1/decide
- *   Authorization: Bearer jv_live_...
+ *   Authorization: Bearer <JEV_API_KEY>
  *   Content-Type: application/json
  *   { state, questions: { id: { type, instructions, criteria } }, model? }
  *   -> { model, answers: { id: { type, choice|score|noul, confidence?, probabilities?, legend? } },
@@ -27,25 +28,22 @@ import type {
  * Notas del contrato:
  *  - `state` puede ser string, objeto o array (se envía un objeto con las señales).
  *  - `model` es opcional: se envía `jev-latest` salvo que se fije JEV_MODEL.
- *  - En este host las preguntas `noul` llevan SOLO `instructions` (su `criteria`
- *    binario no está documentado), por eso el matiz va dentro de las instrucciones.
- *  - Errores documentados: 400 validación, 401 credencial, 402 sin crédito
- *    (code `insufficient_credits`), 403 cuenta inactiva, 404 endpoint
- *    desconocido y 502 error upstream (reintentable).
- *
- * Si algún día se usa una clave del servicio en la nube de TypeSafe AI
- * (sin el prefijo `jv_live_`), se conserva ese endpoint. JEV_ENDPOINT permite
- * forzar uno explícito.
+ *  - En este host las preguntas `noul` llevan SOLO `instructions`.
+ *  - Errores documentados: 400, 401, 402 (insufficient_credits), 403, 404 y
+ *    502 (reintentable).
  *
  * La clave sale únicamente de JEV_API_KEY (o del panel, que la guarda en
  * .env.local). Nunca se registra ni se devuelve al navegador.
+ *
+ * Las preguntas y los umbrales de decisión NO cambiaron en la Fase 3: lo único
+ * que cambió es la información que recibe el motor (señales más ricas + dossier).
  */
 
 export const JEV_HOSTED_ENDPOINT = "https://jevtypesafeai.com/api/v1/decide";
 export const JEV_CLOUD_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_KEY_PREFIX = "jv_live_";
 export const JEV_DEFAULT_MODEL = "jev-latest";
-export const SIGNALS_VERSION = "signals-v1";
+export const SIGNALS_VERSION = "signals-v2";
 
 /** Umbrales de ruteo, decididos en nuestro código (no por el modelo). */
 export const JEV_CONFIDENCE_THRESHOLD = 0.6;
@@ -56,6 +54,8 @@ export interface JevOptions {
   model?: string;
   timeoutMs?: number;
   endpoint?: string;
+  /** Dossier digital (Fase 3) que se adjunta al estado enviado. */
+  dossier?: BusinessDossier | null;
 }
 
 export interface JevConfig {
@@ -112,6 +112,7 @@ const SIGNAL_FIELDS = [
 export function buildOpportunitySignals(
   lead: SignalLeadLike,
   evidence: LeadEvidence[] | undefined,
+  dossier?: BusinessDossier | null,
 ): OpportunitySignals {
   const status = (field: string) => fieldStatus(evidence, field as never);
   const supported = (field: string) => {
@@ -125,14 +126,23 @@ export function buildOpportunitySignals(
     Boolean(lead.website && String(lead.website).trim());
 
   const consultedSources = Array.from(
-    new Set((evidence || []).map((item) => item.source)),
+    new Set([
+      ...(evidence || []).map((item) => item.source),
+      ...((dossier?.sourcesConsulted as string[] | undefined) || []),
+    ]),
   ).sort();
+
+  const socialProfile =
+    supported("instagram") ||
+    supported("facebook") ||
+    supported("social") ||
+    Boolean(dossier?.social && Object.values(dossier.social).some((list) => list.length > 0));
 
   return {
     version: SIGNALS_VERSION,
     business: {
       name: lead.nombre || "",
-      category: lead.rubro || "",
+      category: lead.rubro || dossier?.business?.category || "",
       zone: lead.zona || "",
       hasAddress: Boolean(lead.direccion && String(lead.direccion).trim()),
     },
@@ -158,6 +168,10 @@ export function buildOpportunitySignals(
     evidenceCount: (evidence || []).length,
     notSearched: SIGNAL_FIELDS.filter((field) => status(field) === "not_searched"),
     consultedSources,
+    hasContactForm: supported("contact_form") || Boolean(dossier?.contacts?.contactForms?.length),
+    hasAnySocialProfile: socialProfile,
+    identityStatus: dossier?.identity?.status ?? "sin_correlacionar",
+    identityConfidence: dossier?.identity?.confidence,
   };
 }
 
@@ -174,7 +188,7 @@ interface JevQuestionMap {
 }
 
 /**
- * Las cuatro preguntas del Opportunity Engine.
+ * Las cuatro preguntas del Opportunity Engine (sin cambios en la Fase 3).
  * Las de tipo `noul` no llevan `criteria`: en este contrato solo aceptan
  * `instructions`, así que la aclaración va dentro del texto.
  */
@@ -218,18 +232,42 @@ export function buildQuestions(): JevQuestionMap {
 export function buildJevState(
   signals: OpportunitySignals,
   evidence: LeadEvidence[] | undefined,
+  dossier?: BusinessDossier | null,
 ): Record<string, unknown> {
-  return {
+  const state: Record<string, unknown> = {
     summary: [
       `${signals.business.name || "Comercio sin nombre"} (${signals.business.category || "rubro desconocido"}) en ${signals.business.zone || "zona desconocida"}.`,
       `Sitio web: ${signals.website.present ? "sí" : "no"} (estado de evidencia: ${signals.website.status}).`,
-      `Contacto: teléfono=${signals.hasPhone ? "sí" : "no"}, email=${signals.hasEmail ? "sí" : "no"}, WhatsApp=${signals.hasWhatsapp ? "sí" : "no"}.`,
+      `Contacto: teléfono=${signals.hasPhone ? "sí" : "no"}, email=${signals.hasEmail ? "sí" : "no"}, WhatsApp=${signals.hasWhatsapp ? "sí" : "no"}, formulario=${signals.hasContactForm ? "sí" : "no"}.`,
       `Presencia: Instagram=${signals.hasInstagram ? "sí" : "no"}, Facebook=${signals.hasFacebook ? "sí" : "no"}, tienda online=${signals.hasEcommerce ? "sí" : "no"}, catálogo=${signals.hasCatalog ? "sí" : "no"}.`,
+      `Identidad correlacionada: ${signals.identityStatus}${signals.identityConfidence !== undefined ? ` (${signals.identityConfidence})` : ""}.`,
       `Campos sin buscar todavía: ${signals.notSearched.length ? signals.notSearched.join(", ") : "ninguno"}.`,
+      `Fuentes consultadas: ${signals.consultedSources.length ? signals.consultedSources.join(", ") : "ninguna"}.`,
     ].join("\n"),
     signals,
     evidence: renderEvidenceLines(evidence),
   };
+
+  if (dossier) {
+    state.dossier = {
+      sourcesConsulted: dossier.sourcesConsulted,
+      sourcesUnavailable: dossier.sourcesUnavailable,
+      coverage: {
+        supported: dossier.coverage.supported,
+        total: dossier.coverage.total,
+        searched: dossier.coverage.searched,
+        notSearched: dossier.coverage.notSearched,
+      },
+      website: dossier.website,
+      contacts: dossier.contacts,
+      social: dossier.social,
+      commerce: dossier.commerce,
+      google: dossier.google,
+      identity: dossier.identity,
+    };
+  }
+
+  return state;
 }
 
 /* ------------------------------------------------------------------ */
@@ -388,7 +426,7 @@ export async function askJev(
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          state: buildJevState(signals, evidence),
+          state: buildJevState(signals, evidence, options.dossier),
           model: config.model,
           questions: buildQuestions(),
         }),
