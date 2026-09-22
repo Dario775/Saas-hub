@@ -569,7 +569,22 @@ export async function discoverBusinessPresence(
   const sourcesFailed: { source: string; error: string }[] = [];
   const sourcesSkipped: { source: string; reason: string }[] = [];
   const webSearchQueries: string[] = [];
-  const searchStats = { queries: 0, evaluated: 0, accepted: 0, rejected: 0, ambiguous: 0 };
+  const searchStats = {
+    queries: 0,
+    evaluated: 0,
+    accepted: 0,
+    rejected: 0,
+    ambiguous: 0,
+    identityMatched: 0,
+    identityProbable: 0,
+    identityAmbiguous: 0,
+    identityRejected: 0,
+    evidenceAccepted: 0,
+    directoryHints: 0,
+    socialProfilesAccepted: 0,
+    officialWebsitesAccepted: 0,
+    geographicRejected: 0,
+  };
   const errors: string[] = [];
 
   const existingEvidence = lead.evidence || [];
@@ -592,6 +607,20 @@ export async function discoverBusinessPresence(
           sourcesSkipped: [],
           webSearchQueries: [],
           searchResults: { queries: 0, evaluated: 0, accepted: 0, rejected: 0, ambiguous: 0 },
+          provenance: {
+            initialKnownFields: [
+              ...new Set(
+                existingEvidence
+                  .filter((entry) => entry.status === "verified" || entry.status === "found")
+                  .map((entry) => entry.field as string),
+              ),
+            ],
+            derivedFields: [],
+            discoveredFields: [],
+            verifiedFields: [],
+            inferredFields: [],
+            newFieldsDiscovered: [],
+          },
           coverageBefore,
           coverageAfter: cached.coverage,
           identity: cached.identity ?? null,
@@ -674,13 +703,25 @@ export async function discoverBusinessPresence(
         item,
       );
       searchStats.evaluated += 1;
+      if (verdict.status === "matched") searchStats.identityMatched += 1;
+      else if (verdict.status === "probable") searchStats.identityProbable += 1;
+      else if (verdict.status === "ambiguous") searchStats.identityAmbiguous += 1;
+      else searchStats.identityRejected += 1;
+      if (verdict.reason === "geographic_conflict") searchStats.geographicRejected += 1;
+
       if (verdict.accepted) {
         searchStats.accepted += 1;
         const alreadyHasWebsite = supportedValues(evidence, "website").length > 0;
-        evidence = mergeEvidence(
-          evidence,
-          evidenceForSearchItem(lead, item, verdict, alreadyHasWebsite),
-        );
+        const added = evidenceForSearchItem(lead, item, verdict, alreadyHasWebsite);
+        searchStats.evidenceAccepted += added.length;
+        const host = hostOf(item.url);
+        if (DIRECTORY_HOSTS.some((blocked) => host.includes(blocked))) searchStats.directoryHints += 1;
+        else if (/instagram|facebook|tiktok|linkedin|youtube|fb[.]com/i.test(host)) {
+          searchStats.socialProfilesAccepted += 1;
+        } else if (added.some((entry) => entry.field === "website")) {
+          searchStats.officialWebsitesAccepted += 1;
+        }
+        evidence = mergeEvidence(evidence, added);
       } else if (verdict.status === "ambiguous") {
         searchStats.ambiguous += 1;
         ambiguousUrls.push(item.url);
@@ -713,6 +754,7 @@ export async function discoverBusinessPresence(
   const websiteBlock: DossierWebsiteBlock = {
     status: fieldStatus(evidence, "website"),
     url: websiteUrl || undefined,
+    declared: Boolean(websiteUrl),
     checkedUrls: [],
   };
 
@@ -731,6 +773,17 @@ export async function discoverBusinessPresence(
       websiteBlock.title = enriched.website.title;
       websiteBlock.description = enriched.website.description;
       websiteBlock.status = fieldStatus(evidence, "website");
+      websiteBlock.declared = true;
+      if (!enriched.website.reachable) {
+        const joined = enriched.errors.join(" ").toLowerCase();
+        websiteBlock.failureType = joined.includes("enotfound")
+          ? "dns_not_found"
+          : joined.includes("tard") || joined.includes("timeout")
+            ? "timeout"
+            : joined.includes("respondi") && joined.includes("error")
+              ? "http_error"
+              : "unknown";
+      }
       if (enriched.website.reachable) sourcesSucceeded.push("website");
       else
         sourcesFailed.push({
@@ -768,6 +821,46 @@ export async function discoverBusinessPresence(
 
   const coverageAfter = evidenceCoverage(evidence, DEFAULT_EVALUATED_FIELDS);
   const generatedAt = now.toISOString();
+
+  // Provenance: separa lo que ya sabíamos de lo que se descubrió en esta corrida.
+  const supportedStatuses = new Set(["verified", "found"]);
+  const initialKnownFields = [
+    ...new Set(
+      existingEvidence
+        .filter((entry) => supportedStatuses.has(entry.status))
+        .map((entry) => entry.field as string),
+    ),
+  ];
+  const EXTERNAL_SOURCES = new Set(["web_search", "website", "openstreetmap", "google_places"]);
+  const derivedFields = [
+    ...new Set(
+      leadRecordEvidence(lead)
+        .map((entry) => entry.field as string)
+        .filter((field) => !initialKnownFields.includes(field)),
+    ),
+  ];
+  const discoveredFields = [
+    ...new Set(
+      evidence
+        .filter(
+          (entry) =>
+            EXTERNAL_SOURCES.has(entry.source) &&
+            supportedStatuses.has(entry.status) &&
+            !initialKnownFields.includes(entry.field as string),
+        )
+        .map((entry) => entry.field as string),
+    ),
+  ];
+  const verifiedFields = [...new Set(evidence.filter((entry) => entry.status === "verified").map((entry) => entry.field as string))];
+  const inferredFields = [...new Set(evidence.filter((entry) => entry.status === "inferred").map((entry) => entry.field as string))];
+  const provenance = {
+    initialKnownFields,
+    derivedFields,
+    discoveredFields,
+    verifiedFields,
+    inferredFields,
+    newFieldsDiscovered: discoveredFields,
+  };
   const dossier = buildDossier({
     lead,
     evidence,
@@ -806,6 +899,7 @@ export async function discoverBusinessPresence(
       sourcesSkipped,
       webSearchQueries,
       searchResults: searchStats,
+      provenance,
       coverageBefore,
       coverageAfter,
       identity,

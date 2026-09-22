@@ -25,6 +25,8 @@ export interface IdentitySubject {
 
 export interface IdentityMatchResult {
   status: IdentityMatchStatus;
+  /** Motivo estructurado cuando el rechazo es por una regla concreta. */
+  reason?: string;
   score: number;
   /** Puntaje normalizado por reglas: min(1, score / 8), acotado a 0..1. */
   confidence: number;
@@ -233,10 +235,9 @@ export const SEARCH_MATCH_FORMULA =
   "score por reglas: nombre en título o snippet +3, nombre en el slug/handle de la URL +2, dirección o número de calle en el texto +2, teléfono del prospecto en el texto o URL +3, misma ciudad en el texto o URL +1, rubro en el texto +1, mismo dominio que el sitio declarado +3; sin señales de identidad se rechaza. Estados: matched >=6, probable >=4, ambiguous >=2, rejected <2. confidence = min(1, score/8).";
 
 /**
- * Ciudades y provincias que, si aparecen en un resultado y NO son las del
- * prospecto, descartan el candidato (evita homónimos de otra provincia).
+ * (Reemplazada en la Fase 3.3 por GEO_PLACES + geoCompatibility.)
  */
-export const OTHER_PLACES = [
+export const OTHER_PLACES_LEGACY = [
   "tucuman",
   "salto",
   "cordoba",
@@ -264,6 +265,98 @@ export const OTHER_PLACES = [
   "guatemala",
 ];
 
+/**
+ * Lugares conocidos (con alias y país) para descartar resultados de otra
+ * geografía. Lista deliberadamente chica y extensible.
+ */
+export const GEO_PLACES: { id: string; country: string; aliases: string[] }[] = [
+  { id: "caba", country: "AR", aliases: ["buenos aires", "caba", "c a b a", "ciudad autonoma de buenos aires", "capital federal", "capital"] },
+  { id: "salta", country: "AR", aliases: ["salta", "salta capital", "ciudad de salta"] },
+  { id: "tucuman", country: "AR", aliases: ["tucuman", "san miguel de tucuman"] },
+  { id: "cordoba", country: "AR", aliases: ["cordoba", "ciudad de cordoba"] },
+  { id: "rosario", country: "AR", aliases: ["rosario"] },
+  { id: "mendoza", country: "AR", aliases: ["mendoza"] },
+  { id: "laplata", country: "AR", aliases: ["la plata"] },
+  { id: "mardelplata", country: "AR", aliases: ["mar del plata"] },
+  { id: "salto", country: "AR", aliases: ["salto"] },
+  { id: "banfield", country: "AR", aliases: ["banfield"] },
+  { id: "laferrere", country: "AR", aliases: ["laferrere"] },
+  { id: "sanisidro", country: "AR", aliases: ["san isidro"] },
+  { id: "jujuy", country: "AR", aliases: ["jujuy", "san salvador de jujuy"] },
+  { id: "catamarca", country: "AR", aliases: ["catamarca"] },
+  { id: "santiago", country: "AR", aliases: ["santiago del estero"] },
+  { id: "corrientes", country: "AR", aliases: ["corrientes"] },
+  { id: "posadas", country: "AR", aliases: ["posadas", "misiones"] },
+  { id: "chaco", country: "AR", aliases: ["chaco", "resistencia"] },
+  { id: "neuquen", country: "AR", aliases: ["neuquen"] },
+  { id: "argentina", country: "AR", aliases: ["argentina", "republica argentina"] },
+  { id: "newyork", country: "US", aliases: ["new york", "nueva york", "nyc", "brooklyn", "manhattan", "queens", "bronx", "greenwich village"] },
+  { id: "usa", country: "US", aliases: ["usa", "u s a", "united states", "estados unidos", "ee uu"] },
+  { id: "espana", country: "ES", aliases: ["espana", "spain", "madrid", "barcelona"] },
+  { id: "uruguay", country: "UY", aliases: ["uruguay", "montevideo"] },
+  { id: "chile", country: "CL", aliases: ["chile", "santiago de chile"] },
+  { id: "mexico", country: "MX", aliases: ["mexico", "cdmx", "ciudad de mexico"] },
+  { id: "brasil", country: "BR", aliases: ["brasil", "brazil", "sao paulo", "rio de janeiro"] },
+  { id: "paraguay", country: "PY", aliases: ["paraguay", "asuncion"] },
+  { id: "bolivia", country: "BO", aliases: ["bolivia", "la paz"] },
+  { id: "peru", country: "PE", aliases: ["peru", "lima"] },
+  { id: "colombia", country: "CO", aliases: ["colombia", "bogota"] },
+  { id: "guatemala", country: "GT", aliases: ["guatemala"] },
+  { id: "ecuador", country: "EC", aliases: ["ecuador", "guayaquil", "quito"] },
+];
+
+export type GeoCompatibility = "compatible" | "conflict" | "unknown";
+
+/** Detecta lugares mencionados como palabra completa (evita "salta" dentro de "salto"). */
+export function detectPlaces(text: string): { id: string; country: string; alias: string }[] {
+  const normalized = " " + normalizeIdentityText(text) + " ";
+  const found: { id: string; country: string; alias: string }[] = [];
+  for (const place of GEO_PLACES) {
+    for (const alias of place.aliases) {
+      const needle = normalizeIdentityText(alias);
+      if (!needle) continue;
+      if (new RegExp("(^| )" + needle + "( |$)").test(normalized)) {
+        found.push({ id: place.id, country: place.country, alias });
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Compatibilidad geográfica conservadora.
+ * La AUSENCIA de información geográfica nunca es un conflicto.
+ * Un alias que ya figura en la propia dirección del prospecto tampoco cuenta
+ * como conflicto (por ejemplo, una calle Tucumán en Salta).
+ */
+export function geoCompatibility(
+  lead: IdentitySubject,
+  text: string,
+): { status: GeoCompatibility; detail?: string } {
+  const leadText = [lead.zona, lead.direccion, "argentina"].filter(Boolean).join(" ");
+  const leadPlaces = detectPlaces(leadText);
+  const resultPlaces = detectPlaces(text);
+  if (!resultPlaces.length) return { status: "unknown" };
+
+  const leadOwnText = normalizeIdentityText([lead.zona, lead.direccion].filter(Boolean).join(" "));
+  const conflictCandidates = resultPlaces.filter((place) => !leadOwnText.includes(place.alias));
+  const leadIds = new Set(leadPlaces.map((place) => place.id));
+  const leadCountries = new Set(leadPlaces.map((place) => place.country));
+
+  const samePlace = resultPlaces.filter((place) => leadIds.has(place.id) && place.id !== "argentina");
+  if (samePlace.length) return { status: "compatible", detail: samePlace[0].alias };
+  if (!conflictCandidates.length) return { status: "unknown" };
+  if (leadCountries.size) {
+    const foreign = conflictCandidates.filter((place) => !leadCountries.has(place.country));
+    if (foreign.length)
+      return { status: "conflict", detail: foreign[0].alias + " (" + foreign[0].country + ")" };
+  }
+  const otherCity = conflictCandidates.filter((place) => place.id !== "argentina");
+  if (otherCity.length) return { status: "conflict", detail: otherCity[0].alias };
+  return { status: "unknown" };
+}
+
 export interface SearchResultLike {
   title?: string;
   url: string;
@@ -283,22 +376,17 @@ export function matchSearchResult(
   const url = (item.url || "").toLowerCase();
   const text = title + " " + snippet + " " + url;
 
-  // 1) Si el resultado menciona otra ciudad o provincia y NO menciona la
-  //    ciudad del prospecto, se descarta. Así no se castiga una calle
-  //    homónima (por ejemplo, una calle Tucumán en Salta).
-  const zoneText = normalizeIdentityText(lead.zona);
-  const ownCityTokens = zoneText
-    .split(" ")
-    .filter((token) => token.length > 3 && !OTHER_PLACES.includes(token));
-  const mentionsOwnCity = ownCityTokens.some((token) => text.includes(token));
-  const rival = OTHER_PLACES.find((place) => text.includes(place) && !zoneText.includes(place));
-  if (rival && !mentionsOwnCity) {
+  // 1) Filtro geográfico conservador: solo se descarta si hay evidencia
+  //    explícita de otra ciudad, provincia o país incompatible.
+  const geo = geoCompatibility(lead, text);
+  if (geo.status === "conflict") {
     return {
       status: "rejected",
+      reason: "geographic_conflict",
       score: 0,
       confidence: 0,
       matchedSignals: [],
-      conflictingSignals: ["menciona otra ubicación: " + rival],
+      conflictingSignals: ["geografía incompatible: " + String(geo.detail || "otra ubicación")],
       formula: SEARCH_MATCH_FORMULA,
       accepted: false,
     };

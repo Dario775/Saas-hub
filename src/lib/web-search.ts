@@ -152,12 +152,35 @@ export function buildDiscoveryQueries(
     { intent: "identidad_ciudad", query: '"' + name + '"' + (city ? ' "' + city + '"' : "") },
   ];
   if (address) {
-    planned.push({ intent: "identidad_direccion", query: '"' + name + '" "' + address.split(",")[0].trim() + '"' });
+    const street = address.split(",")[0].trim();
+    const normalizedName = name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    const normalizedStreet = street
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    // Si la dirección incluye el nombre del negocio, la consulta sería
+    // equivalente a repetir el nombre: se omite.
+    const redundant = normalizedStreet.includes(normalizedName) || normalizedName.includes(normalizedStreet);
+    if (street && !redundant) {
+      planned.push({ intent: "identidad_direccion", query: '"' + name + '" "' + street + '"' });
+    }
   }
   planned.push({ intent: "instagram", query: '"' + name + '" instagram' + (city ? " " + city : "") });
   planned.push({ intent: "facebook", query: '"' + name + '" facebook' + (city ? " " + city : "") });
   planned.push({ intent: "whatsapp", query: '"' + name + '" whatsapp' + (city ? " " + city : "") });
-  return planned.slice(0, Math.max(1, Math.min(max, 5)));
+  const unique: PlannedQuery[] = [];
+  for (const item of planned) {
+    if (!unique.some((other) => other.query === item.query)) unique.push(item);
+  }
+  // Deduplica por texto y por intención: nunca dos consultas equivalentes.
+  const byIntent = new Map<string, PlannedQuery>();
+  for (const item of unique) {
+    if (!byIntent.has(item.intent)) byIntent.set(item.intent, item);
+  }
+  return [...byIntent.values()].slice(0, Math.max(1, Math.min(max, 5)));
 }
 
 /** Devuelve el proveedor configurado, o null si no hay ninguno. */

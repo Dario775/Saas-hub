@@ -93,6 +93,10 @@ export interface IdentityMatchSummary {
 
 export interface DossierWebsiteBlock {
   status: DataStatus;
+  /** El prospecto ya declaraba un sitio (aunque no resuelva). */
+  declared?: boolean;
+  /** Motivo del fallo cuando no fue alcanzable. */
+  failureType?: "dns_not_found" | "timeout" | "http_error" | "unknown";
   url?: string;
   reachable?: boolean;
   finalUrl?: string;
@@ -165,13 +169,35 @@ export interface DiscoverySummary {
   sourcesSkipped?: { source: string; reason: string }[];
   /** Consultas de búsqueda web efectivamente enviadas. */
   webSearchQueries?: string[];
-  /** Resultados de búsqueda evaluados, aceptados y rechazados por correlación. */
+  /** Resultados de búsqueda: qué se evaluó y en qué terminó cada uno. */
   searchResults?: {
     queries: number;
     evaluated: number;
+    /** Candidatos aceptados por correlación (incluye directorios). */
     accepted: number;
     rejected: number;
     ambiguous: number;
+    identityMatched?: number;
+    identityProbable?: number;
+    identityAmbiguous?: number;
+    identityRejected?: number;
+    /** Datos efectivamente registrados como evidencia. */
+    evidenceAccepted?: number;
+    /** Indicios de directorio (inferidos, nunca asertados). */
+    directoryHints?: number;
+    socialProfilesAccepted?: number;
+    officialWebsitesAccepted?: number;
+    geographicRejected?: number;
+  };
+  /** De dónde salió cada campo: propio del lead, derivado o descubierto. */
+  provenance?: {
+    initialKnownFields: string[];
+    derivedFields: string[];
+    discoveredFields: string[];
+    verifiedFields: string[];
+    inferredFields: string[];
+    /** Campos que no se conocían antes y aparecieron en fuentes externas. */
+    newFieldsDiscovered: string[];
   };
   coverageBefore: EvidenceCoverage;
   coverageAfter: EvidenceCoverage;

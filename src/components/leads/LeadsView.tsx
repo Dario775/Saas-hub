@@ -1666,11 +1666,32 @@ ${demoUrl}
                     </p>
                   ) : null}
                   {analysisResult.discovery?.searchResults ? (
-                    <p className="text-[11px] text-slate-600">
-                      Resultados evaluados: {analysisResult.discovery.searchResults.evaluated} ·
-                      aceptados {analysisResult.discovery.searchResults.accepted} · rechazados{" "}
-                      {analysisResult.discovery.searchResults.rejected} · ambiguos (no fusionados){" "}
-                      {analysisResult.discovery.searchResults.ambiguous}
+                    <>
+                      <p className="text-[11px] text-slate-600">
+                        Resultados evaluados: {analysisResult.discovery.searchResults.evaluated} ·
+                        identidad: coincide {analysisResult.discovery.searchResults.identityMatched ?? 0},
+                        probable {analysisResult.discovery.searchResults.identityProbable ?? 0},
+                        ambigua {analysisResult.discovery.searchResults.identityAmbiguous ?? 0},
+                        rechazada {analysisResult.discovery.searchResults.identityRejected ?? 0}
+                      </p>
+                      <p className="text-[11px] text-slate-600">
+                        Datos registrados: {analysisResult.discovery.searchResults.evidenceAccepted ?? 0} ·
+                        perfiles sociales {analysisResult.discovery.searchResults.socialProfilesAccepted ?? 0} ·
+                        sitios oficiales {analysisResult.discovery.searchResults.officialWebsitesAccepted ?? 0} ·
+                        indicios de directorio {analysisResult.discovery.searchResults.directoryHints ?? 0} ·
+                        rechazados por geografía{" "}
+                        {analysisResult.discovery.searchResults.geographicRejected ?? 0}
+                      </p>
+                    </>
+                  ) : null}
+                  {analysisResult.discovery?.provenance ? (
+                    <p className="text-[11px] text-slate-500">
+                      Provenance — propios del lead:{" "}
+                      {analysisResult.discovery.provenance.initialKnownFields.join(", ") || "ninguno"} ·
+                      nuevos descubiertos:{" "}
+                      {analysisResult.discovery.provenance.newFieldsDiscovered.join(", ") || "ninguno"} ·
+                      verificados: {analysisResult.discovery.provenance.verifiedFields.join(", ") || "ninguno"} ·
+                      inferidos: {analysisResult.discovery.provenance.inferredFields.join(", ") || "ninguno"}
                     </p>
                   ) : null}
                   {analysisResult.discovery?.cacheHit ? (

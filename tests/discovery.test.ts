@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  geoCompatibility,
   identityStatusToEvidence,
   matchBusinessIdentity,
+  matchSearchResult,
   normalizePhoneDigits,
 } from "../src/lib/identity-match";
 import {
@@ -649,6 +651,176 @@ test("un directorio correlacionado no se toma como sitio oficial", async () => {
   } finally {
     patched.restore();
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* Fase 3.3: geografía, provenance y consultas redundantes             */
+/* ------------------------------------------------------------------ */
+
+test("un resultado de otra ciudad y país se rechaza por conflicto geográfico", () => {
+  const verdict = matchSearchResult(
+    { nombre: "Boutique Magnolia", zona: "Palermo, Buenos Aires", direccion: "Gurruchaga 1650, CABA" },
+    {
+      title: "Magnolia Bakery - Greenwich Village",
+      url: "https://www.tripadvisor.es/Hotel_Review-Magnolia",
+      snippet: "New York, USA",
+    },
+  );
+  assert.equal(verdict.status, "rejected");
+  assert.equal(verdict.reason, "geographic_conflict");
+});
+
+test("las variantes de la misma ciudad son compatibles", () => {
+  assert.equal(
+    geoCompatibility({ zona: "Palermo, Buenos Aires" }, "Ciudad Autónoma de Buenos Aires").status,
+    "compatible",
+  );
+  assert.equal(geoCompatibility({ zona: "Palermo, CABA" }, "Capital Federal").status, "compatible");
+  assert.equal(geoCompatibility({ zona: "Salta Capital" }, "Ciudad de Salta").status, "compatible");
+});
+
+test("sin datos geográficos en el resultado no hay conflicto", () => {
+  assert.equal(geoCompatibility({ zona: "Salta Capital" }, "venta de repuestos por mayor").status, "unknown");
+  const verdict = matchSearchResult(
+    { nombre: "Volkswagen Repuestos", zona: "Salta Capital, Salta" },
+    { title: "Volkswagen Repuestos", url: "https://ejemplo.com.ar/volkswagenrepuestos" },
+  );
+  assert.notEqual(verdict.reason, "geographic_conflict");
+});
+
+test("una calle homónima de otra provincia no genera conflicto", () => {
+  const verdict = matchSearchResult(
+    { nombre: "Ferretería Digital", zona: "Centro / San Nicolás, CABA", direccion: "Tucumán 266, CABA" },
+    {
+      title: "Ferretería Digital - Páginas Amarillas",
+      url: "https://www.paginasamarillas.com.ar/fichas/ferreteria-digital_15152450",
+    },
+  );
+  assert.notEqual(verdict.reason, "geographic_conflict");
+});
+
+test("un directorio de otra ciudad no aporta evidencia", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(
+      lead({
+        nombre: "Boutique Magnolia",
+        rubro: "tienda de ropa",
+        zona: "Palermo, Buenos Aires",
+        direccion: "Gurruchaga 1650, CABA",
+      }),
+      {
+        skipWebsite: true,
+        webSearchProvider: providerWith([
+          {
+            title: "Magnolia Bakery, Greenwich Village",
+            url: "https://www.tripadvisor.com/Restaurant_Review-Magnolia",
+            snippet: "New York, USA. Tel: +1 212 555 0100",
+          },
+        ]),
+      },
+    );
+    assert.equal(supportedValues(result.evidence, "phone").length, 0);
+    assert.ok((result.summary.searchResults?.geographicRejected || 0) >= 1);
+    assert.equal(result.summary.searchResults?.evidenceAccepted, 0);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("los datos derivados del lead no cuentan como descubrimiento", async () => {
+  const patched = patchFetch(() => {
+    throw new Error("sin red");
+  });
+  try {
+    const result = await discoverBusinessPresence(
+      lead({
+        nombre: "Boutique Magnolia",
+        zona: "Palermo, Buenos Aires",
+        direccion: "Gurruchaga 1650, CABA",
+        telefono: "+54 11 5543-1200",
+      }),
+      { skipGoogle: true, skipWebSearch: true, skipWebsite: true },
+    );
+    assert.equal(result.summary.provenance?.newFieldsDiscovered.length, 0);
+    assert.ok((result.summary.provenance?.derivedFields || []).includes("phone"));
+    assert.equal(patched.calls.length, 0);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("un dato nuevo de un directorio correlacionado cuenta como descubierto", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(
+      lead({
+        nombre: "Ferretería Digital",
+        rubro: "ferretería",
+        zona: "Centro / San Nicolás, CABA",
+        direccion: "Solís 316, Monserrat",
+      }),
+      {
+        skipWebsite: true,
+        webSearchProvider: providerWith([
+          {
+            title: "Ferretería Digital en San Nicolás",
+            url: "https://www.guiaurbana.com.ar/empresas/ferreteria-digital-buenos-aires",
+            snippet: "Ferretería Digital, Solís 316, Buenos Aires. Tel: 4381-9633",
+          },
+        ]),
+      },
+    );
+    assert.ok((result.summary.provenance?.newFieldsDiscovered || []).includes("phone"));
+    assert.equal(supportedValues(result.evidence, "phone").length, 1);
+    assert.ok((result.summary.searchResults?.directoryHints || 0) >= 1);
+    assert.equal(result.summary.searchResults?.evidenceAccepted, 1);
+  } finally {
+    patched.restore();
+  }
+});
+
+test("un sitio declarado que no resuelve queda desconocido con motivo dns_not_found", async () => {
+  const patched = patchFetch(() => jsonResponse({ places: [] }));
+  try {
+    const result = await discoverBusinessPresence(
+      lead({
+        nombre: "Iron Fitness",
+        zona: "San Isidro, Buenos Aires",
+        direccion: "Belgrano 410",
+        website: "https://noexiste.test",
+      }),
+      {
+        skipWebSearch: true,
+        fetchImpl: async () => {
+          throw new Error("getaddrinfo ENOTFOUND noexiste.test");
+        },
+      },
+    );
+    assert.equal(result.dossier.website.declared, true);
+    assert.equal(result.dossier.website.reachable, false);
+    assert.equal(result.dossier.website.failureType, "dns_not_found");
+    // El dato declarado por el lead sigue siendo "found"; lo que el sondeo
+    // aporta es "unknown": el sitio no se pudo abrir y no se afirma nada.
+    const siteProbe = result.evidence.filter(
+      (entry) => entry.field === "website" && entry.source === "website",
+    );
+    assert.equal(siteProbe.length, 1);
+    assert.equal(siteProbe[0].status, "unknown");
+  } finally {
+    patched.restore();
+  }
+});
+
+test("no se generan consultas redundantes cuando la dirección repite el nombre", () => {
+  const queries = buildDiscoveryQueries({
+    nombre: "Ferretería Digital",
+    zona: "Centro / San Nicolás, CABA",
+    direccion: "Ferretería Digital - Congreso, 316, Solís, Monserrat",
+  });
+  assert.ok(!queries.some((item) => item.intent === "identidad_direccion"));
+  assert.equal(queries.length, 4);
+  assert.equal(new Set(queries.map((item) => item.query)).size, queries.length);
 });
 
 test("Google Places ausente es una fuente opcional: no es fallo ni afecta la cobertura", async () => {
