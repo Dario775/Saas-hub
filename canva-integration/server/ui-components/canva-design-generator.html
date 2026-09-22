@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canva Design Generator</title>
+  <style>
+    * { 
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #1A1A1A;
+      padding: 24px;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+      color: white;
+    }
+    
+    .header h1 {
+      font-size: 36px;
+      font-weight: 900;
+      margin-bottom: 12px;
+    }
+    
+    .header p {
+      font-size: 16px;
+      opacity: 0.9;
+    }
+    
+    .candidates-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 24px;
+    }
+    
+    .candidate-card {
+      background: transparent;
+      border-radius: 24px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      border: 3px solid transparent;
+    }
+    
+    .candidate-card:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+      border-color: #667eea;
+    }
+    
+    .candidate-card.selected {
+      border-color: #667eea;
+      box-shadow: 0 12px 32px rgba(102, 126, 234, 0.4);
+    }
+    
+    .candidate-thumbnail-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      background: linear-gradient(135deg, #E8E8EA 0%, #F5F5F7 100%);
+    }
+    
+    .candidate-thumbnail {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    
+    .candidate-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      padding: 6px 14px;
+      background: rgba(102, 126, 234, 0.95);
+      color: white;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      backdrop-filter: blur(10px);
+    }
+    
+    .selected-badge {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      width: 32px;
+      height: 32px;
+      background: #667eea;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 18px;
+    }
+    
+    .candidate-info {
+      padding: 20px;
+    }
+    
+    .candidate-title {
+      font-weight: 700;
+      font-size: 16px;
+      color: #1A1A1A;
+      margin-bottom: 16px;
+    }
+    
+    .candidate-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .action-button {
+      flex: 1;
+      padding: 12px;
+      background: transparent;
+      border: 2px solid #667eea;
+      color: #667eea;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .action-button:hover {
+      background: #667eea;
+      color: white;
+      transform: scale(1.02);
+    }
+    
+    .action-button.primary {
+      background: #667eea;
+      color: white;
+    }
+    
+    .action-button.primary:hover {
+      background: #5568d3;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 80px 20px;
+      color: white;
+    }
+    
+    .empty-icon {
+      font-size: 80px;
+      margin-bottom: 24px;
+      opacity: 0.8;
+    }
+    
+    .empty-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    
+    .empty-description {
+      font-size: 16px;
+      opacity: 0.9;
+    }
+    
+    @media (max-width: 768px) {
+      body {
+        padding: 16px;
+      }
+      
+      .header h1 {
+        font-size: 28px;
+      }
+      
+      .candidates-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="root"></div>
+  </div>
+  
+  <script>
+    (function() {
+      const props = window.__WIDGET_PROPS__ || {};
+      const { candidates = [], job_id = null } = props;
+
+      const root = document.getElementById('root');
+      let selectedCandidateId = null;
+
+      // Header — static content only, no API data
+      const header = document.createElement('div');
+      header.className = 'header';
+      const h1 = document.createElement('h1');
+      h1.textContent = 'AI Generated Designs';
+      const p = document.createElement('p');
+      p.textContent = 'Select a design to create it in your Canva account';
+      header.appendChild(h1);
+      header.appendChild(p);
+      root.appendChild(header);
+
+      if (candidates && candidates.length > 0) {
+        const grid = document.createElement('div');
+        grid.className = 'candidates-grid';
+
+        candidates.forEach((candidate, index) => {
+          const card = document.createElement('div');
+          card.className = 'candidate-card';
+          card.dataset.candidateId = candidate.id;
+
+          // Thumbnail container
+          const thumbContainer = document.createElement('div');
+          thumbContainer.className = 'candidate-thumbnail-container';
+
+          const img = document.createElement('img');
+          img.src = candidate.thumbnail_url || candidate.preview_url || 'https://via.placeholder.com/400x225?text=Design+Candidate';
+          img.className = 'candidate-thumbnail';
+          img.alt = 'Design candidate ' + (index + 1);
+          img.loading = 'lazy';
+          thumbContainer.appendChild(img);
+
+          const badgeEl = document.createElement('div');
+          badgeEl.className = 'candidate-badge';
+          badgeEl.textContent = 'Candidate ' + (index + 1);
+          thumbContainer.appendChild(badgeEl);
+
+          card.appendChild(thumbContainer);
+
+          // Info section
+          const infoEl = document.createElement('div');
+          infoEl.className = 'candidate-info';
+
+          const titleEl = document.createElement('div');
+          titleEl.className = 'candidate-title';
+          titleEl.textContent = 'Design Option ' + (index + 1);
+          infoEl.appendChild(titleEl);
+
+          const actionsEl = document.createElement('div');
+          actionsEl.className = 'candidate-actions';
+
+          const selectButton = document.createElement('button');
+          selectButton.className = 'action-button primary';
+          selectButton.dataset.action = 'select';
+          selectButton.textContent = 'Select & Create';
+          actionsEl.appendChild(selectButton);
+
+          const previewButton = document.createElement('button');
+          previewButton.className = 'action-button';
+          previewButton.dataset.action = 'preview';
+          previewButton.textContent = 'Preview';
+          actionsEl.appendChild(previewButton);
+
+          infoEl.appendChild(actionsEl);
+          card.appendChild(infoEl);
+
+          // Click handlers
+          selectButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+
+            document.querySelectorAll('.candidate-card').forEach(c => {
+              c.classList.remove('selected');
+              c.querySelector('.selected-badge')?.remove();
+            });
+
+            card.classList.add('selected');
+            selectedCandidateId = candidate.id;
+
+            const selectedBadge = document.createElement('div');
+            selectedBadge.className = 'selected-badge';
+            selectedBadge.textContent = '\u2713';
+            card.querySelector('.candidate-thumbnail-container').appendChild(selectedBadge);
+
+            if (window.parent && window.parent.postMessage) {
+              window.parent.postMessage({
+                type: 'canva-create-from-candidate',
+                data: { jobId: job_id, candidateId: candidate.id, candidate }
+              }, '*');
+            }
+          });
+
+          previewButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (window.parent && window.parent.postMessage) {
+              window.parent.postMessage({
+                type: 'canva-preview-candidate',
+                data: {
+                  candidateId: candidate.id,
+                  previewUrl: candidate.preview_url || candidate.url,
+                  candidate
+                }
+              }, '*');
+            }
+          });
+
+          card.addEventListener('click', () => {
+            previewButton.click();
+          });
+
+          grid.appendChild(card);
+        });
+
+        root.appendChild(grid);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+
+        const icon = document.createElement('div');
+        icon.className = 'empty-icon';
+        icon.textContent = '\uD83C\uDFA8';
+
+        const title = document.createElement('div');
+        title.className = 'empty-title';
+        title.textContent = 'No design candidates generated';
+
+        const desc = document.createElement('div');
+        desc.className = 'empty-description';
+        desc.textContent = 'Try providing a more detailed description of what you want to create.';
+
+        empty.appendChild(icon);
+        empty.appendChild(title);
+        empty.appendChild(desc);
+        root.appendChild(empty);
+      }
+    })();
+  </script>
+</body>
+</html>
+

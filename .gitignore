@@ -1,0 +1,64 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+build/
+dist/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+**/.env*
+!.env.example
+!**/.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+/src/generated/prisma
+
+# Local operation data and credentials
+/.refactor-backup/
+/custom-pages.json
+/scheduled-posts.json
+/leads-crm.json
+/campaign-config.json
+/brands.json
+/leads/data/
+/public/generated-videos/
+/public/scheduled-images/
+**/.canva-tokens.json
+**/*.tmp
+**/*.lockdir/
+/test-results/
+/playwright-report/
+
