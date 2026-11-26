@@ -1,6 +1,9 @@
 import fs from "fs";
 import path from "path";
-import { readJson,writeJson } from "./json-store";
+import { readJson,withFileLock,writeJson } from "./json-store";
+import { leadIdentity } from "./lead-identity";
+import type { LeadEvidence } from "./lead-evidence";
+import type { BusinessDossier, OpportunitySummary } from "./opportunity-types";
 
 export type LeadStatus = "nuevo" | "contactado" | "respondio" | "demo" | "cliente" | "descartado";
 
@@ -13,6 +16,10 @@ export interface LeadItem {
   telefono?: string;
   website?: string;
   email?: string;
+  /**
+   * Puntuación pública real cuando la fuente la provee (Google Places).
+   * OpenStreetMap no la expone: en ese caso queda sin definir y nunca se estima.
+   */
   rating?: number | string;
   types?: string;
   status: LeadStatus;
@@ -22,6 +29,14 @@ export interface LeadItem {
   whatsappLink?: string;
   batch?: string;
   searchDate?: string;
+  /** Identidad estable del comercio, independiente del id de la fuente. */
+  identity?: string;
+  /** Evidencias: de dónde salió cada dato y con qué estado. */
+  evidence?: LeadEvidence[];
+  /** Resumen del último análisis de oportunidad (sin el detalle completo). */
+  opportunity?: OpportunitySummary | null;
+  /** Dossier del descubrimiento digital; se reutiliza mientras siga fresco. */
+  dossier?: BusinessDossier | null;
 }
 
 export interface LeadCrmData {
@@ -205,7 +220,7 @@ export function getLeads(): LeadItem[] {
       telefono: l.telefono || "",
       website: l.website || "",
       email: l.email || "",
-      rating: l.rating || "",
+      rating: l.rating || undefined,
       types: l.types || "",
       status: l.status || crmEntry.status || "nuevo",
       notes: l.notes ?? crmEntry.notes ?? "",
@@ -213,6 +228,16 @@ export function getLeads(): LeadItem[] {
       customPitch: l.customPitch || crmEntry.customPitch || undefined,
       batch: l.batch,
       searchDate: l.searchDate,
+      identity:
+        l.identity ||
+        leadIdentity({
+          nombre: l.nombre,
+          direccion: l.direccion,
+          zona: l.zona,
+        }),
+      evidence: Array.isArray(l.evidence) ? l.evidence : undefined,
+      opportunity: l.opportunity ?? null,
+      dossier: l.dossier ?? null,
     };
     leadItem.whatsappLink = buildWhatsAppLink(leadItem);
     return leadItem;
@@ -249,6 +274,8 @@ export function saveLeads(leads: LeadItem[]): void {
     place_id: l.place_id,
     batch: l.batch, searchDate: l.searchDate, status: l.status, notes: l.notes,
     customPitch: l.customPitch, lastContactedAt: l.lastContactedAt,
+    identity: l.identity, evidence: l.evidence, opportunity: l.opportunity,
+    dossier: l.dossier,
   }));
   writeJson(LEADS_JSON_PATH, rawList);
 
@@ -260,6 +287,22 @@ export function saveLeads(leads: LeadItem[]): void {
       .join(",")
   );
   fs.writeFileSync(LEADS_CSV_PATH, "\ufeff" + [csvHeader, ...csvRows].join("\n"), "utf8");
+}
+
+/**
+ * Mutación serializada de la lista de prospectos: usa el bloqueo del proyecto
+ * para que dos operaciones simultáneas no se pisen.
+ */
+export async function mutateLeads<T>(
+  mutate: (leads: LeadItem[]) => T,
+): Promise<T> {
+  ensureDir();
+  return withFileLock(LEADS_JSON_PATH, async () => {
+    const leads = getLeads();
+    const result = mutate(leads);
+    saveLeads(leads);
+    return result;
+  });
 }
 
 export function updateLeadStatus(placeId: string, status: LeadStatus, notes?: string, customPitch?: string): LeadItem | null {

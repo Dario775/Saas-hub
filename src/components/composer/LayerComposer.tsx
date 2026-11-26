@@ -35,6 +35,9 @@ import { LayerList } from "./LayerList";
 import { LayerProperties } from "./LayerProperties";
 import { PresetsModal } from "./PresetsModal";
 import { preloadImage,renderLayersToCanvas } from "./canvas-renderer";
+import { createConceptLayers,type ConceptCopy } from "./concept-layers";
+import type { ComposerDesign } from "./flyer-design";
+import { trimTransparentMargin } from "./trim-image";
 import {
 ASPECT_RATIOS,
 AspectRatioId,
@@ -50,8 +53,23 @@ TextLayer,
 TextPreset,
 } from "./types";
 
+/** Se exporta a la mayor escala que se pueda publicar; 2 da texto y logo bien nítidos. */
+const EXPORT_SCALES = [2, 1.75, 1.5, 1];
+/** Next corta los cuerpos de más de 10 MB: deja lugar para el texto del post. */
+const MAX_EXPORT_CHARS = 9_500_000;
+
+function initialAspect(copy?: ConceptCopy | null): AspectRatioId {
+  return copy?.aspectRatio && copy.aspectRatio in ASPECT_RATIOS
+    ? (copy.aspectRatio as AspectRatioId)
+    : "1:1";
+}
+
 interface LayerComposerProps {
   initialImage?: string | null;
+  /** Textos del Estudio creativo que se cargan como capas editables. */
+  initialCopy?: ConceptCopy | null;
+  /** Flyer ya armado, separado en capas editables. */
+  initialDesign?: ComposerDesign | null;
   brandContext?: any;
   brandLogosMap?: Record<string, string>;
   availableBrands?: { id: string; name: string }[];
@@ -60,12 +78,14 @@ interface LayerComposerProps {
 
 export function LayerComposer({
   initialImage,
+  initialCopy,
+  initialDesign,
   brandContext,
   brandLogosMap = {},
   availableBrands = [],
   onExportToPublish,
 }: LayerComposerProps) {
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioId>("1:1");
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioId>(() => initialDesign?.aspectRatio || initialAspect(initialCopy));
   const [customDimensions, setCustomDimensions] = useState<{ width: number; height: number }>({
     width: 1080,
     height: 1080,
@@ -118,6 +138,44 @@ export function LayerComposer({
 
   // Estado inicial de capas
   const createDefaultLayers = (bgImage?: string | null): CanvasLayer[] => {
+    if (initialDesign) return initialDesign.layers;
+    if (initialCopy) {
+      const { width, height } = canvasDimensions;
+      return [
+        {
+          id: "bg-default",
+          name: "Capa de Fondo",
+          type: "background",
+          visible: true,
+          locked: true,
+          opacity: 1,
+          blendMode: "normal",
+          x: 0,
+          y: 0,
+          width,
+          height,
+          rotation: 0,
+          fillType: bgImage ? "image" : "gradient",
+          color: "#0a0d14",
+          gradientStart: "#0f172a",
+          gradientEnd: "#020617",
+          gradientAngle: 135,
+          imageUrl: bgImage || undefined,
+        },
+        ...createConceptLayers({
+          copy: initialCopy,
+          width,
+          height,
+          accentColor: brandColors.secondary[0] || brandColors.primary[0] || "#38bdf8",
+          headingFont: brandContext?.typography?.heading || "Montserrat",
+          bodyFont: brandContext?.typography?.body || "Montserrat",
+          logoId: activeLogoId,
+          logoDataUrl: brandContext?.logoDataUrl || undefined,
+          brandName: brandContext?.name,
+          website: brandContext?.websiteUrl,
+        }),
+      ];
+    }
     return [
       {
         id: "bg-default",
@@ -218,20 +276,40 @@ export function LayerComposer({
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>("title-default");
   const selectedLayer = layers.find((l) => l.id === selectedLayerId) || null;
 
+  // Muchos logos traen margen propio: se ajusta para que no se vean chicos.
+  const conceptLogo = initialCopy ? brandContext?.logoDataUrl : undefined;
+  useEffect(() => {
+    if (!conceptLogo) return;
+    let cancelled = false;
+    void trimTransparentMargin(conceptLogo).then((trimmed) => {
+      if (cancelled || trimmed === conceptLogo) return;
+      setLayers((current) =>
+        current.map((layer) =>
+          layer.type === "brand-logo" && layer.customDataUrl === conceptLogo
+            ? { ...layer, customDataUrl: trimmed }
+            : layer,
+        ),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conceptLogo]);
+
   // Historial Undo / Redo
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [draftSaveError, setDraftSaveError] = useState(false);
   useEffect(() => {
     let cancelled = false;
     readEditorDraft(activeLogoId).then(draft => {
-      if (!cancelled && draft && !initialImage) {
+      if (!cancelled && draft && !initialImage && !initialCopy && !initialDesign) {
         setLayers(draft.layers);
         setAspectRatio(draft.aspectRatio);
         if (draft.customDimensions) setCustomDimensions(draft.customDimensions);
       }
     }).catch(() => { if (!cancelled) setDraftSaveError(true); }).finally(() => { if (!cancelled) setDraftLoaded(true); });
     return () => { cancelled = true; };
-  }, [activeLogoId, initialImage]);
+  }, [activeLogoId, initialImage, initialCopy, initialDesign]);
   useEffect(() => {
     if (!draftLoaded) return;
     const timer = setTimeout(() => {
@@ -907,8 +985,13 @@ export function LayerComposer({
   async function generateExportBase64(): Promise<string> {
     const offscreenCanvas = document.createElement("canvas");
     const dimensions = canvasDimensions;
-    await renderLayersToCanvas(offscreenCanvas, layers, dimensions, brandLogosMap);
-    return offscreenCanvas.toDataURL("image/png", 1.0);
+    let result = "";
+    for (const scale of EXPORT_SCALES) {
+      await renderLayersToCanvas(offscreenCanvas, layers, dimensions, brandLogosMap, scale);
+      result = offscreenCanvas.toDataURL("image/png");
+      if (result.length <= MAX_EXPORT_CHARS) break;
+    }
+    return result;
   }
 
   // Descargar PNG
@@ -1574,6 +1657,7 @@ export function LayerComposer({
         targetLayerId={comfyTargetLayerId}
         layers={layers}
         onApplyImageToLayer={handleApplyImageFromComfy}
+        canvasSize={canvasDimensions}
         brandContext={brandContext}
       />
 

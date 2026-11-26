@@ -8,13 +8,18 @@ export default function ComposerView({
 }: {
   controller: WorkspaceController;
 }) {
+  // Se conservan mientras dure la vista: al limpiarlos, el editor cargaba el
+  // borrador guardado encima de la imagen recién enviada.
   const [initialImage] = useState(controller.composerInitialImage);
+  const [initialCopy] = useState(controller.composerInitialCopy);
+  const [initialDesign] = useState(controller.composerInitialDesign);
   useEffect(() => {
     controller.setComposerInitialImage(null);
+    controller.setComposerInitialCopy(null);
+    controller.setComposerInitialDesign(null);
   }, []);
   const {
     tab,
-    composerInitialImage,
     generatedImage,
     draftBrand,
     currentBrand,
@@ -31,7 +36,9 @@ export default function ComposerView({
         <div className="animate-fadeIn">
           <LayerComposer
             key={currentBrand.id}
-            initialImage={composerInitialImage || generatedImage}
+            initialImage={initialDesign ? null : initialImage || generatedImage}
+            initialCopy={initialCopy}
+            initialDesign={initialDesign}
             brandContext={draftBrand || currentBrand}
             brandLogosMap={BRAND_LOGOS}
             availableBrands={brands.map((b) => ({ id: b.id, name: b.name }))}

@@ -1,10 +1,86 @@
 import { mergeLeadSearch } from "@/lib/lead-merge";
+import type { EvidenceField, LeadEvidence } from "@/lib/lead-evidence";
+import { makeEvidence } from "@/lib/lead-evidence";
+import { leadIdentity, osmPlaceId, osmPlaceIdentity } from "@/lib/lead-identity";
 import { calculateStats,getLeads,LeadItem,saveLeads } from "@/lib/leads-service";
 import { NextRequest,NextResponse } from "next/server";
 
 const PLACES_NEW_URL = "https://places.googleapis.com/v1/places:searchText";
 const PLACES_LEGACY_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json";
 const PLACE_DETAILS_LEGACY_URL = "https://maps.googleapis.com/maps/api/place/details/json";
+
+function placesEvidence(input: {
+  source: "openstreetmap" | "google_places";
+  sourceUrl?: string;
+  website?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  rating?: string | number;
+  category?: string;
+}): LeadEvidence[] {
+  const evidence: LeadEvidence[] = [];
+  const push = (field: EvidenceField, value: string | number | null | undefined) => {
+    if (value === undefined || value === null || value === "") return;
+    evidence.push(
+      makeEvidence({
+        field,
+        status: "found",
+        value,
+        source: input.source,
+        sourceUrl: input.sourceUrl,
+      }),
+    );
+  };
+
+  push("website", input.website);
+  push("phone", input.phone);
+  push("email", input.email);
+  push("address", input.address);
+  push("category", input.category);
+  push("rating", input.rating);
+
+  if (!input.rating && input.source === "openstreetmap") {
+    evidence.push(
+      makeEvidence({
+        field: "rating",
+        status: "not_found",
+        source: input.source,
+        sourceUrl: input.sourceUrl,
+        notes: "OpenStreetMap no publica puntuaciones: no se estima ninguna.",
+      }),
+    );
+  }
+
+  return evidence;
+}
+
+function osmEvidence(place: {
+  osm_type?: string;
+  osm_id?: string | number;
+  extratags?: Record<string, string>;
+  display_name?: string;
+  type?: string;
+  class?: string;
+}): LeadEvidence[] {
+  return placesEvidence({
+    source: "openstreetmap",
+    sourceUrl:
+      place.osm_type && place.osm_id
+        ? "https://www.openstreetmap.org/" + place.osm_type + "/" + place.osm_id
+        : undefined,
+    website:
+      place.extratags?.website || place.extratags?.["contact:website"] || "",
+    phone:
+      place.extratags?.phone ||
+      place.extratags?.["contact:phone"] ||
+      place.extratags?.["contact:mobile"] ||
+      "",
+    email: place.extratags?.email || place.extratags?.["contact:email"] || "",
+    address: place.display_name || "",
+    category: place.type || place.class || "",
+  });
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -133,7 +209,7 @@ export async function POST(request: NextRequest) {
       // Convertir candidatos de OpenStreetMap en items del CRM
       for (const p of osmCandidates) {
         const rawName = p.name || p.display_name.split(",")[0].trim();
-        const pId = `osm_${p.place_id || p.osm_id || Math.random().toString(36).substring(2, 9)}`;
+        const pId = osmPlaceId(p);
 
         if (existingIds.has(pId)) continue;
 
@@ -159,7 +235,9 @@ export async function POST(request: NextRequest) {
           telefono: phone,
           website: website,
           email: p.extratags?.email || p.extratags?.["contact:email"] || "",
-          rating: Number((4.3 + Math.random() * 0.6).toFixed(1)),
+          identity: osmPlaceIdentity(p),
+          evidence: osmEvidence(p),
+          // OpenStreetMap no expone puntuaciones: el campo queda sin definir y nunca se estima.
           types: p.type || p.class || `${cleanRubro.toLowerCase()}|shop`,
           status: "nuevo",
           batch: `${cleanRubro} en ${resolvedLocationName}`,
@@ -245,6 +323,20 @@ export async function POST(request: NextRequest) {
               telefono: phone,
               website: website,
               email: "",
+              identity: leadIdentity({
+                nombre: name,
+                direccion: p.formattedAddress || "",
+                zona: resolvedLocationName,
+              }),
+              evidence: placesEvidence({
+                source: "google_places",
+                sourceUrl: "https://www.google.com/maps/place/?q=place_id:" + pId,
+                website,
+                phone,
+                address: p.formattedAddress || "",
+                rating: p.rating,
+                category: Array.isArray(p.types) ? p.types.join("|") : "",
+              }),
               rating: p.rating || "",
               types: Array.isArray(p.types) ? p.types.join("|") : "",
               status: "nuevo",
@@ -301,6 +393,21 @@ export async function POST(request: NextRequest) {
               telefono: phone,
               website: website,
               email: "",
+              identity: leadIdentity({
+                nombre: p.name || "",
+                direccion: p.formatted_address || "",
+                zona: resolvedLocationName,
+              }),
+              evidence: placesEvidence({
+                source: "google_places",
+                sourceUrl:
+                  "https://www.google.com/maps/place/?q=place_id:" + p.place_id,
+                website,
+                phone,
+                address: p.formatted_address || "",
+                rating: p.rating,
+                category: (p.types || []).join("|"),
+              }),
               rating: p.rating || "",
               types: (p.types || []).join("|"),
               status: "nuevo",

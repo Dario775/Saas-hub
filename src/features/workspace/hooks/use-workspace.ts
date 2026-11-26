@@ -1,4 +1,8 @@
 "use client";
+import type { ConceptCopy } from "@/components/composer/concept-layers";
+import type { ComposerDesign } from "@/components/composer/flyer-design";
+import { CLAUDE_DEFAULT_MODEL } from "@/lib/claude-models";
+import { renderSizeForAspect } from "@/lib/render-sizes";
 import type { ScheduledPost } from "@/lib/schedule-types";
 /* eslint-disable react-hooks/set-state-in-effect -- Hydrate stored workspace preferences and synchronize external brand selection. */
 import {
@@ -207,9 +211,13 @@ export function useWorkspace() {
   const [composerInitialImage, setComposerInitialImage] = useState<
     string | null
   >(null);
+  const [composerInitialCopy, setComposerInitialCopy] =
+    useState<ConceptCopy | null>(null);
+  const [composerInitialDesign, setComposerInitialDesign] =
+    useState<ComposerDesign | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
   const [selectedGenerator, setSelectedGenerator] =
-    useState<ImageGenerator>("flux-dev");
+    useState<ImageGenerator>("z-image-turbo");
   const [genParams, setGenParams] = useState<Record<string, number | string>>(
     {},
   );
@@ -303,7 +311,7 @@ export function useWorkspace() {
 
   // AI Settings states
   const [llmProvider, setLlmProvider] = useState<
-    "openrouter" | "ollama" | "gemini" | "openai"
+    "openrouter" | "ollama" | "gemini" | "openai" | "deepseek" | "claude"
   >("ollama");
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [openrouterModel, setOpenrouterModel] = useState(
@@ -313,6 +321,14 @@ export function useWorkspace() {
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [deepseekApiKey, setDeepseekApiKey] = useState("");
+  const [deepseekModel, setDeepseekModel] = useState("deepseek-flash");
+  const [deepseekEnvKeySet, setDeepseekEnvKeySet] = useState<boolean>(false);
+  const [claudeApiKey, setClaudeApiKey] = useState("");
+  const [claudeModel, setClaudeModel] = useState(CLAUDE_DEFAULT_MODEL);
+  const [claudeEnvKeySet, setClaudeEnvKeySet] = useState<boolean>(false);
+  const [jevApiKey, setJevApiKey] = useState("");
+  const [jevEnvKeySet, setJevEnvKeySet] = useState<boolean>(false);
   const [showLlmModal, setShowLlmModal] = useState(false);
   const [showImageLightbox, setShowImageLightbox] = useState(false);
 
@@ -326,6 +342,10 @@ export function useWorkspace() {
     geminiModel,
     openaiApiKey,
     openaiModel: "gpt-4o-mini",
+    deepseekApiKey,
+    deepseekModel,
+    claudeApiKey,
+    claudeModel,
   };
 
   useEffect(() => {
@@ -363,8 +383,13 @@ export function useWorkspace() {
         if (settings.ollamaUrl) setOllamaUrl(settings.ollamaUrl);
         if (settings.ollamaModel) setOllamaModel(settings.ollamaModel);
         if (settings.geminiModel) setGeminiModel(settings.geminiModel);
+        if (settings.deepseekModel) setDeepseekModel(settings.deepseekModel);
+        if (settings.claudeModel) setClaudeModel(settings.claudeModel);
+        setClaudeEnvKeySet(Boolean(settings.claudeKeyConfigured));
         setOpenaiEnvKeySet(Boolean(settings.openaiApiKeyConfigured));
         setGeminiEnvKeySet(Boolean(settings.geminiApiKeyConfigured));
+        setDeepseekEnvKeySet(Boolean(settings.deepseekKeyConfigured));
+        setJevEnvKeySet(Boolean(settings.jevKeyConfigured));
       } catch {
         toast.error("No se pudo cargar la configuración de IA.");
       }
@@ -447,7 +472,7 @@ export function useWorkspace() {
       (selectedGenerator.startsWith("gemini-") ||
         selectedGenerator.startsWith("dall-e-"))
     ) {
-      setSelectedGenerator("flux-dev");
+      setSelectedGenerator("z-image-turbo");
     } else if (
       imageSource === "gemini" &&
       !selectedGenerator.startsWith("gemini-")
@@ -462,7 +487,7 @@ export function useWorkspace() {
   }, [imageSource, selectedGenerator]);
 
   async function handleSaveLlmSettings(
-    provider: "openrouter" | "ollama" | "gemini" | "openai",
+    provider: "openrouter" | "ollama" | "gemini" | "openai" | "deepseek" | "claude",
     key: string,
     model: string,
     url: string,
@@ -470,6 +495,11 @@ export function useWorkspace() {
     gKey: string,
     gModel: string,
     oKey: string,
+    dKey: string,
+    dModel: string,
+    jKey: string,
+    cKey: string,
+    cModel: string,
   ) {
     setLlmProvider(provider);
     setOpenrouterKey(key);
@@ -479,6 +509,11 @@ export function useWorkspace() {
     setGeminiApiKey(gKey);
     setGeminiModel(gModel);
     setOpenaiApiKey(oKey);
+    setDeepseekApiKey(dKey);
+    setDeepseekModel(dModel);
+    setJevApiKey(jKey);
+    setClaudeApiKey(cKey);
+    setClaudeModel(cModel);
 
     try {
       const response = await fetch("/api/settings", {
@@ -493,6 +528,11 @@ export function useWorkspace() {
           geminiApiKey: gKey,
           geminiModel: gModel,
           openaiApiKey: oKey,
+          deepseekKey: dKey,
+          deepseekModel: dModel,
+          jevKey: jKey,
+          claudeKey: cKey,
+          claudeModel: cModel,
         }),
       });
       if (!response.ok) throw new Error((await response.json()).error);
@@ -501,6 +541,12 @@ export function useWorkspace() {
       setOpenaiApiKey("");
       if (gKey) setGeminiEnvKeySet(true);
       if (oKey) setOpenaiEnvKeySet(true);
+      setDeepseekApiKey("");
+      if (dKey) setDeepseekEnvKeySet(true);
+      setJevApiKey("");
+      if (jKey) setJevEnvKeySet(true);
+      setClaudeApiKey("");
+      if (cKey) setClaudeEnvKeySet(true);
       setShowLlmModal(false);
       toast.success("Conexión guardada de forma privada en el servidor");
     } catch (error) {
@@ -1126,7 +1172,8 @@ export function useWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: concept.visualPrompt,
+          prompt: concept.renderPrompt || concept.visualPrompt,
+          ...renderSizeForAspect(concept.aspectRatio || creativeAspect),
           negativePrompt:
             concept.negativePrompt ||
             "ugly, deformed, blurry, low resolution, bad anatomy",
@@ -1674,6 +1721,10 @@ export function useWorkspace() {
     setGeneratedImage,
     composerInitialImage,
     setComposerInitialImage,
+    composerInitialCopy,
+    setComposerInitialCopy,
+    composerInitialDesign,
+    setComposerInitialDesign,
     imageLoading,
     setImageLoading,
     selectedGenerator,
@@ -1779,6 +1830,21 @@ export function useWorkspace() {
     setGeminiApiKey,
     geminiModel,
     setGeminiModel,
+    deepseekApiKey,
+    setDeepseekApiKey,
+    deepseekModel,
+    setDeepseekModel,
+    deepseekEnvKeySet,
+    setDeepseekEnvKeySet,
+    claudeApiKey,
+    setClaudeApiKey,
+    claudeModel,
+    setClaudeModel,
+    claudeEnvKeySet,
+    jevApiKey,
+    setJevApiKey,
+    jevEnvKeySet,
+    setJevEnvKeySet,
     showLlmModal,
     setShowLlmModal,
     showImageLightbox,

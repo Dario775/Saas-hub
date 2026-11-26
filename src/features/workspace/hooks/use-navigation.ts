@@ -10,6 +10,7 @@ type Navigation = {
 const views = new Set([
   "overview",
   "creative",
+  "flyers",
   "image",
   "composer",
   "publish",

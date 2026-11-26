@@ -170,6 +170,8 @@ export interface FlyerFontOption {
 export const FLYER_FONTS: FlyerFontOption[] = [
   { family: "Bebas Neue", displayName: "Bebas Neue (Titular Bold)", category: "Display / Impacto", weights: [400] },
   { family: "Anton", displayName: "Anton (Impacto Alto)", category: "Display / Impacto", weights: [400] },
+  { family: "Inter Tight", displayName: "Inter Tight (Flyers)", category: "Modern Sans", weights: [400, 500, 600, 700, 800] },
+  { family: "Inter", displayName: "Inter (Textos)", category: "Modern Sans", weights: [400, 500, 600, 700] },
   { family: "Montserrat", displayName: "Montserrat (Versátil Pro)", category: "Modern Sans", weights: [400, 700, 900] },
   { family: "Outfit", displayName: "Outfit (Geométrica Moderna)", category: "Modern Sans", weights: [400, 600, 800, 900] },
   { family: "Poppins", displayName: "Poppins (Limpia & Amigable)", category: "Modern Sans", weights: [400, 600, 800, 900] },

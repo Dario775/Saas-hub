@@ -8,7 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Check,Image as ImageIcon,Layers,Loader2,Paintbrush,Scissors,Sparkles,Type,Wand2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { removeSolidBackground } from "./canvas-renderer";
+import { renderSizeForCanvas } from "@/lib/render-sizes";
+import { cleanTransparentImage, removeBackground } from "./ai-background-removal";
 import { ImageEditorModal } from "./ImageEditorModal";
 import { CanvasLayer } from "./types";
 
@@ -19,14 +20,18 @@ interface ComfyLayerModalProps {
   layers: CanvasLayer[];
   onApplyImageToLayer: (layerId: string | null, imageUrl: string, promptUsed: string, generatorUsed: string) => void;
   brandContext?: any;
+  /** Lienzo del editor: los fondos se generan con su misma proporción. */
+  canvasSize?: { width: number; height: number };
 }
 
 type LayerGenMode = "text-lettering" | "isolated-object" | "scene-background";
 
 const GENERATORS_LIST = [
-  { id: "flux-dev", name: "Flux 1 Dev (Recomendado para 3D & Textos)", speed: "⚡⚡", desc: "Realismo fotográfico y detalles épicos" },
-  { id: "z-image-turbo", name: "Z-Image Turbo (Ultra Rápido)", speed: "⚡⚡⚡⚡", desc: "Generación en 3 a 5 segundos" },
+  { id: "z-image-turbo", name: "Z-Image Turbo (Recomendado para fondos)", speed: "⚡⚡⚡⚡", desc: "Escenas con espacio para el texto" },
+  { id: "flux-2-klein", name: "FLUX 2 Klein (Personas & Productos)", speed: "⚡⚡⚡⚡", desc: "Realismo fotográfico en 4 pasos" },
+  { id: "flux-dev", name: "Flux 1 Dev", speed: "⚡⚡", desc: "Realismo fotográfico y detalles épicos" },
   { id: "ideogram-4", name: "Ideogram 4 (Composición & Texto)", speed: "⚡⚡⚡", desc: "Excelente composición visual" },
+  { id: "qwen-image-2.1", name: "Qwen Image 2.1 (Texto & transparencia real)", speed: "⚡⚡⚡", desc: "Letras y objetos con fondo transparente nativo" },
   { id: "realvis-xl", name: "RealVis XL (Hiperrealismo)", speed: "⚡⚡", desc: "Texturas orgánicas y materiales reales" },
   { id: "gemini-2.5-flash-image", name: "Gemini Imagen 3 (Nube)", speed: "☁️ Nube", desc: "Generación sin requerir GPU local" },
   { id: "dall-e-3", name: "DALL-E 3 (OpenAI)", speed: "☁️ Nube", desc: "Creatividad visual artística" },
@@ -51,6 +56,7 @@ export function ComfyLayerModal({
   layers,
   onApplyImageToLayer,
   brandContext,
+  canvasSize,
 }: ComfyLayerModalProps) {
   const [selectedLayerId, setSelectedLayerId] = useState<string>(targetLayerId || "new_layer");
   const [genMode, setGenMode] = useState<LayerGenMode>("text-lettering");
@@ -58,7 +64,7 @@ export function ComfyLayerModal({
   const [selectedStyleId, setSelectedStyleId] = useState("cake");
   const [customDetails, setCustomDetails] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
-  const [selectedGenerator, setSelectedGenerator] = useState("flux-dev");
+  const [selectedGenerator, setSelectedGenerator] = useState("qwen-image-2.1");
   const [autoRemoveBg, setAutoRemoveBg] = useState(true);
   const [loading, setLoading] = useState(false);
   const [cuttingBg, setCuttingBg] = useState(false);
@@ -66,16 +72,26 @@ export function ComfyLayerModal({
   const [lastRawImage, setLastRawImage] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
 
+  // Qwen entrega el PNG ya transparente: no hace falta recortar después.
+  const nativeTransparency =
+    autoRemoveBg && genMode !== "scene-background" && selectedGenerator === "qwen-image-2.1";
+
+  function chooseMode(mode: LayerGenMode) {
+    setGenMode(mode);
+    setSelectedGenerator(mode === "scene-background" ? "z-image-turbo" : "qwen-image-2.1");
+  }
+
   // Construir prompt optimizado según el modo seleccionado
   function buildFinalPrompt(): string {
+    const backdrop = nativeTransparency ? "" : ", clean edge contrast, pure dark solid background";
     if (genMode === "text-lettering") {
       const textToUse = letteringText.trim() || "50% OFF";
       const styleObj = LETTERING_STYLES.find((s) => s.id === selectedStyleId) || LETTERING_STYLES[0];
       const extra = customDetails.trim() ? `, ${customDetails.trim()}` : "";
-      return `3D volumetric typography lettering spelling exact text "${textToUse}", ${styleObj.promptDesc}${extra}, isolated single object floating in center, clean edge contrast, pure dark solid background, studio product commercial photography, sharp focus, 8k resolution`;
+      return `3D volumetric typography lettering spelling exact text "${textToUse}", ${styleObj.promptDesc}${extra}, isolated single object floating in center${backdrop}, studio product commercial photography, sharp focus`;
     } else if (genMode === "isolated-object") {
       const extra = customDetails.trim() || "modern product";
-      return `isolated single 3D object of ${extra}, studio lighting, floating in center on pure dark solid background, clean edge contrast, sharp focus, 8k render`;
+      return `isolated single 3D object of ${extra}, studio lighting, floating in center${backdrop}, sharp focus`;
     } else {
       return customPrompt.trim() || "cinematic abstract background with soft lighting, 8k resolution";
     }
@@ -95,8 +111,10 @@ export function ComfyLayerModal({
         body: JSON.stringify({
           prompt: finalPrompt,
           generator: selectedGenerator,
-          width: 1024,
-          height: 1024,
+          ...(genMode === "scene-background" && canvasSize
+            ? renderSizeForCanvas(canvasSize.width, canvasSize.height)
+            : { width: 1024, height: 1024 }),
+          ...(nativeTransparency ? { transparent: 1, steps: 25 } : {}),
           brand: brandContext,
         }),
       });
@@ -110,10 +128,11 @@ export function ComfyLayerModal({
       setLastRawImage(data.image);
 
       // Si tiene marcado auto recortar fondo y no es fondo de escena completo
-      if (autoRemoveBg && genMode !== "scene-background") {
+      if (nativeTransparency) {
+        setGeneratedPreview(await cleanTransparentImage(data.image));
+      } else if (autoRemoveBg && genMode !== "scene-background") {
         try {
-          const cutImage = await removeSolidBackground(data.image, 45);
-          setGeneratedPreview(cutImage);
+          setGeneratedPreview((await removeBackground(data.image)).image);
         } catch {
           setGeneratedPreview(data.image);
         }
@@ -135,9 +154,9 @@ export function ComfyLayerModal({
     setCuttingBg(true);
     try {
       if (generatedPreview === lastRawImage) {
-        const cut = await removeSolidBackground(lastRawImage, 45);
-        setGeneratedPreview(cut);
-        toast.success("Fondo eliminado a transparente");
+        const cut = await removeBackground(lastRawImage);
+        setGeneratedPreview(cut.image);
+        toast.success(cut.method === "ia" ? "Fondo eliminado con IA" : "Fondo eliminado por color");
       } else {
         setGeneratedPreview(lastRawImage);
         toast.info("Fondo original restaurado");
@@ -187,7 +206,7 @@ export function ComfyLayerModal({
                 <div className="grid grid-cols-3 gap-1 mt-1">
                   <button
                     type="button"
-                    onClick={() => setGenMode("text-lettering")}
+                    onClick={() => chooseMode("text-lettering")}
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${
                       genMode === "text-lettering"
                         ? "bg-amber-500/20 border-amber-500/60 text-amber-200 shadow-sm"
@@ -203,7 +222,7 @@ export function ComfyLayerModal({
 
                   <button
                     type="button"
-                    onClick={() => setGenMode("isolated-object")}
+                    onClick={() => chooseMode("isolated-object")}
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${
                       genMode === "isolated-object"
                         ? "bg-cyan-500/20 border-cyan-500/60 text-cyan-200 shadow-sm"
@@ -219,7 +238,7 @@ export function ComfyLayerModal({
 
                   <button
                     type="button"
-                    onClick={() => setGenMode("scene-background")}
+                    onClick={() => chooseMode("scene-background")}
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${
                       genMode === "scene-background"
                         ? "bg-purple-500/20 border-purple-500/60 text-purple-200 shadow-sm"

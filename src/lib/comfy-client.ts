@@ -1,12 +1,13 @@
 import fs from "fs";
 import path from "path";
+import { prepareVram } from "./comfy-vram";
 
 // Cliente reutilizable para generar imágenes y videos en ComfyUI
 // Centraliza: salud, submit workflow, poll de historial y descarga de imagen/video
 
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://127.0.0.1:8188";
 const REQUEST_TIMEOUT = 15000;
-const MAX_WAIT = 300000; // 5 min
+const MAX_WAIT = 600000; // 10 min: los modos de máxima calidad superan los 5
 const MAX_VIDEO_WAIT = 600000; // 10 min
 
 export interface ComfyGenerateOptions {
@@ -37,6 +38,7 @@ const SAVE_NODES_BY_GENERATOR: Record<string, string[]> = {
   "realvis-xl": ["9"],
   "z-image-turbo": ["10"],
   "ideogram-4": ["158"],
+  "qwen-image-2.1": ["9"],
 };
 
 export async function comfyHealth(): Promise<boolean> {
@@ -76,6 +78,22 @@ export async function comfyResetQueue(): Promise<void> {
   }
 }
 
+/** Sube una imagen a ComfyUI y devuelve el nombre con el que la ve LoadImage. */
+export async function comfyUpload(image: Buffer): Promise<string> {
+  const form = new FormData();
+  form.set("image", new Blob([new Uint8Array(image)], { type: "image/png" }), `saas_hub_${Date.now()}.png`);
+  form.set("overwrite", "true");
+  const response = await fetch(`${COMFYUI_URL}/upload/image`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+  });
+  if (!response.ok) throw new Error(`ComfyUI no aceptó la imagen (HTTP ${response.status}).`);
+  const data = (await response.json()) as { name?: string; subfolder?: string };
+  if (!data.name) throw new Error("ComfyUI no confirmó la imagen.");
+  return data.subfolder ? `${data.subfolder}/${data.name}` : data.name;
+}
+
 // Envía un workflow y espera el resultado, devolviendo la primera imagen encontrada
 export async function comfyGenerate(
   workflow: Record<string, any>,
@@ -90,6 +108,7 @@ export async function comfyGenerate(
 
   // Cancelar lo que haya quedado activo para evitar mezclar trabajos
   await comfyResetQueue();
+  await prepareVram(generatorId);
 
   const submitController = new AbortController();
   const submitTimer = setTimeout(() => submitController.abort(), REQUEST_TIMEOUT);
@@ -194,6 +213,7 @@ export async function comfyGenerateVideo(
   }
 
   await comfyResetQueue();
+  await prepareVram("video");
 
   const submitController = new AbortController();
   const submitTimer = setTimeout(() => submitController.abort(), REQUEST_TIMEOUT);

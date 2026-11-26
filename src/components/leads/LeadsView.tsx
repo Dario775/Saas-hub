@@ -20,6 +20,7 @@ SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { LeadItem,LeadStatus } from "@/lib/leads-service";
+import type { OpportunityResult } from "@/lib/opportunity-types";
 import { LocationItem,PREDEFINED_LOCATIONS } from "@/lib/location-data";
 import {
 AlertCircle,
@@ -47,6 +48,7 @@ Zap
 } from "lucide-react";
 import { useEffect,useState } from "react";
 import { toast } from "sonner";
+import { DiscoveryPanel } from "./DiscoveryPanel";
 
 const POPULAR_LOCATIONS: LocationItem[] = PREDEFINED_LOCATIONS.filter((l) =>
   [
@@ -97,6 +99,61 @@ const STATUS_CONFIG: Record<LeadStatus, { label: string; color: string; badgeCla
   },
 };
 
+/** Presentación legible: se separa de los valores internos (no se tocan). */
+const FIELD_LABELS_ES: Record<string, string> = {
+  identity: "Identidad",
+  name: "Nombre",
+  category: "Rubro",
+  address: "Dirección",
+  zone: "Zona",
+  website: "Sitio web",
+  phone: "Teléfono",
+  email: "Email",
+  whatsapp: "WhatsApp",
+  contact_form: "Formulario de contacto",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  social: "Otras redes",
+  ecommerce: "Tienda online",
+  catalog: "Catálogo",
+  rating: "Puntuación pública",
+  opening_hours: "Horarios",
+};
+
+const SOURCE_LABELS_ES: Record<string, string> = {
+  openstreetmap: "OpenStreetMap",
+  google_places: "Google Places",
+  website: "Sitio web",
+  web_search: "Búsqueda web",
+  manual: "Manual",
+  derived: "Derivado",
+};
+
+const IDENTITY_LABELS: Record<string, string> = {
+  matched: "Coincide",
+  probable: "Probable",
+  ambiguous: "Ambigua",
+  rejected: "Descartada",
+};
+
+/** ✓ encontrado/verificado · ? desconocido · ○ no buscado · ✗ buscado sin resultado · ⚠ conflictivo */
+const STATUS_META: Record<string, { icon: string; label: string }> = {
+  verified: { icon: "✓", label: "Verificado" },
+  found: { icon: "✓", label: "Encontrado" },
+  inferred: { icon: "?", label: "Inferido" },
+  unknown: { icon: "?", label: "Desconocido" },
+  not_searched: { icon: "○", label: "No buscado" },
+  not_found: { icon: "✗", label: "Buscado, no encontrado" },
+  conflicting: { icon: "⚠", label: "En conflicto" },
+};
+
+function identityStatusToDataStatus(status: string): string {
+  if (status === "matched") return "verified";
+  if (status === "probable") return "found";
+  if (status === "ambiguous") return "conflicting";
+  return "not_found";
+}
+
 const SUGGESTED_RUBROS = [
   "Ferretería",
   "Gimnasio",
@@ -142,6 +199,12 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [searching, setSearching] = useState(false);
   const [scrapingEmails, setScrapingEmails] = useState(false);
+
+  // Análisis de oportunidad: acción manual, no contacta a nadie
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [analysisLead, setAnalysisLead] = useState<LeadItem | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<OpportunityResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Modo de acumulación o reemplazo de resultados
   const [searchMode, setSearchMode] = useState<"replace" | "append">("replace");
@@ -350,6 +413,36 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
       toast.error("Error de conexión durante el escaneo");
     } finally {
       setScrapingEmails(false);
+    }
+  }
+
+  async function handleAnalyzeOpportunity(lead: LeadItem) {
+    setAnalysisLead(lead);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+    setAnalyzingId(lead.place_id);
+    try {
+      const res = await fetch("/api/leads/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ placeId: lead.place_id }),
+      });
+      const data = await res.json();
+      if (data.lead) {
+        setLeads((prev) =>
+          prev.map((item) => (item.place_id === data.lead.place_id ? data.lead : item)),
+        );
+      }
+      if (data.result) {
+        setAnalysisResult(data.result);
+        if (data.result.error) setAnalysisError(data.result.error);
+      } else {
+        setAnalysisError(data.error || "No se pudo analizar la oportunidad.");
+      }
+    } catch {
+      setAnalysisError("Error de conexión durante el análisis.");
+    } finally {
+      setAnalyzingId(null);
     }
   }
 
@@ -962,6 +1055,8 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
         </CardContent>
       </Card>
 
+      <DiscoveryPanel defaultLocation={zonaInput} onImported={fetchLeads} />
+
       {/* Barra de Filtros del Pipeline CRM */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1203,6 +1298,21 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
                     <Button
                       size="sm"
                       variant="ghost"
+                      onClick={() => handleAnalyzeOpportunity(lead)}
+                      disabled={analyzingId === lead.place_id}
+                      className="h-8 px-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] flex items-center gap-1 border border-emerald-500/20"
+                      title="Analizar la oportunidad comercial (no contacta a nadie)"
+                    >
+                      {analyzingId === lead.place_id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Compass className="w-3 h-3 text-emerald-400" />
+                      )}
+                      Analizar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => handleOpenPitchModal(lead)}
                       className="h-8 px-2 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 text-[11px] flex items-center gap-1 border border-purple-500/20"
                       title="Redactar o editar pitch de venta con IA"
@@ -1419,6 +1529,504 @@ ${demoUrl}
       </Dialog>
 
       {/* Modal de Limpieza de Lista / Reset CRM */}
+      {/* Análisis de oportunidad: solo analiza, nunca contacta */}
+      <Dialog
+        open={!!analysisLead}
+        onOpenChange={(open) => !open && setAnalysisLead(null)}
+      >
+        <DialogContent className="bg-[#0e0e18] border-white/10 text-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2 text-emerald-300">
+              <Compass className="w-4 h-4 text-emerald-400" />
+              Análisis de oportunidad de {analysisLead?.nombre}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-400">
+              Solo análisis: no envía mensajes, no publica y no contacta al
+              comercio. Contactar sigue siendo una acción manual y separada.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2 max-h-[60vh] overflow-y-auto pr-1 text-xs">
+            {analyzingId && !analysisResult && (
+              <div className="py-10 text-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-400" />
+                <p className="text-slate-400">
+                  Enriqueciendo datos, clasificando y analizando la oportunidad...
+                </p>
+              </div>
+            )}
+
+            {analysisError && (
+              <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">
+                {analysisError}
+              </div>
+            )}
+
+            {analysisResult && (
+              <>
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Datos del negocio
+                  </h4>
+                  <p className="text-slate-300">
+                    {analysisResult.signals?.business.name || analysisLead?.nombre} ·{" "}
+                    {analysisResult.signals?.business.category || analysisLead?.rubro} ·{" "}
+                    {analysisResult.signals?.business.zone || analysisLead?.zona}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Contactable: {analysisResult.signals?.contactable ? "sí" : "no"} ·
+                    Sitio web:{" "}
+                    {analysisResult.signals?.website.present
+                      ? "sí"
+                      : analysisResult.signals?.website.status === "not_found"
+                        ? "no encontrado en las fuentes consultadas"
+                        : "no se buscó"}
+                  </p>
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Identidad digital
+                  </h4>
+                  {analysisResult.dossier?.identity ? (
+                    <p className="text-slate-300">
+                      {STATUS_META[identityStatusToDataStatus(analysisResult.dossier.identity.status)].icon}{" "}
+                      {IDENTITY_LABELS[analysisResult.dossier.identity.status]} ·{" "}
+                      {analysisResult.dossier.identity.candidateName || "candidato sin nombre"} ·
+                      puntaje {analysisResult.dossier.identity.score} · confianza por reglas{" "}
+                      {analysisResult.dossier.identity.confidence}
+                      {analysisResult.dossier.identity.candidateUrl ? (
+                        <>
+                          {" · "}
+                          <a
+                            href={analysisResult.dossier.identity.candidateUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-400 hover:underline"
+                          >
+                            ver ficha
+                          </a>
+                        </>
+                      ) : null}
+                      {analysisResult.dossier.identity.matchedSignals.length ? (
+                        <>
+                          <br />
+                          <span className="text-[11px] text-slate-500">
+                            Coincide: {analysisResult.dossier.identity.matchedSignals.join(", ")}
+                          </span>
+                        </>
+                      ) : null}
+                      {analysisResult.dossier.identity.conflictingSignals.length ? (
+                        <>
+                          <br />
+                          <span className="text-[11px] text-amber-300">
+                            En conflicto: {analysisResult.dossier.identity.conflictingSignals.join(", ")}
+                          </span>
+                        </>
+                      ) : null}
+                    </p>
+                  ) : (
+                    <p className="text-slate-500">
+                      No se correlacionó identidad con ninguna fuente externa.
+                    </p>
+                  )}
+                  {analysisResult.discovery?.conflicts?.length ? (
+                    <p className="text-[11px] text-amber-300">
+                      Conflictos detectados: {analysisResult.discovery.conflicts.join(" | ")}
+                    </p>
+                  ) : null}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Fuentes consultadas
+                  </h4>
+                  <p className="text-slate-400">
+                    {analysisResult.discovery?.sourcesSucceeded?.length
+                      ? analysisResult.discovery.sourcesSucceeded.join(", ")
+                      : "ninguna"}
+                  </p>
+                  {analysisResult.discovery?.sourcesFailed?.length ? (
+                    <p className="text-[11px] text-amber-300">
+                      No disponibles:{" "}
+                      {analysisResult.discovery.sourcesFailed
+                        .map((item) => item.source + " (" + item.error + ")")
+                        .join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.sourcesSkipped?.length ? (
+                    <p className="text-[11px] text-slate-500">
+                      Fuentes opcionales no configuradas:{" "}
+                      {analysisResult.discovery.sourcesSkipped
+                        .map((item) => item.source + " (" + item.reason + ")")
+                        .join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.webSearchQueries?.length ? (
+                    <p className="text-[11px] text-slate-600">
+                      Consultas web enviadas:{" "}
+                      {analysisResult.discovery.webSearchQueries.join(" | ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.searchResults ? (
+                    <>
+                      <p className="text-[11px] text-slate-600">
+                        Resultados evaluados: {analysisResult.discovery.searchResults.evaluated} ·
+                        identidad: coincide {analysisResult.discovery.searchResults.identityMatched ?? 0},
+                        probable {analysisResult.discovery.searchResults.identityProbable ?? 0},
+                        ambigua {analysisResult.discovery.searchResults.identityAmbiguous ?? 0},
+                        rechazada {analysisResult.discovery.searchResults.identityRejected ?? 0}
+                      </p>
+                      <p className="text-[11px] text-slate-600">
+                        Datos registrados: {analysisResult.discovery.searchResults.evidenceAccepted ?? 0} ·
+                        perfiles sociales {analysisResult.discovery.searchResults.socialProfilesAccepted ?? 0} ·
+                        sitios oficiales {analysisResult.discovery.searchResults.officialWebsitesAccepted ?? 0} ·
+                        indicios de directorio {analysisResult.discovery.searchResults.directoryHints ?? 0} ·
+                        rechazados por geografía{" "}
+                        {analysisResult.discovery.searchResults.geographicRejected ?? 0}
+                      </p>
+                    </>
+                  ) : null}
+                  {analysisResult.discovery?.provenance ? (
+                    <p className="text-[11px] text-slate-500">
+                      Provenance — propios del lead:{" "}
+                      {analysisResult.discovery.provenance.initialKnownFields.join(", ") || "ninguno"} ·
+                      nuevos descubiertos:{" "}
+                      {analysisResult.discovery.provenance.newFieldsDiscovered.join(", ") || "ninguno"} ·
+                      verificados: {analysisResult.discovery.provenance.verifiedFields.join(", ") || "ninguno"} ·
+                      inferidos: {analysisResult.discovery.provenance.inferredFields.join(", ") || "ninguno"}
+                    </p>
+                  ) : null}
+                  {analysisResult.discovery?.cacheHit ? (
+                    <p className="text-[11px] text-slate-500">
+                      Dossier reutilizado de la caché (más reciente que el TTL).
+                    </p>
+                  ) : null}
+                </section>
+
+                {analysisResult.dossier ? (
+                  <>
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Sitio web
+                      </h4>
+                      <p className="text-slate-300">
+                        {STATUS_META[analysisResult.dossier.website.status].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.website.status].label}
+                        {analysisResult.dossier.website.url
+                          ? ": " + analysisResult.dossier.website.url
+                          : ""}
+                        {analysisResult.dossier.website.reachable === false
+                          ? " · no respondió"
+                          : ""}
+                      </p>
+                      {analysisResult.dossier.website.title ? (
+                        <p className="text-[11px] text-slate-500">
+                          Título: {analysisResult.dossier.website.title}
+                        </p>
+                      ) : null}
+                      {analysisResult.dossier.website.description ? (
+                        <p className="text-[11px] text-slate-500">
+                          Descripción: {analysisResult.dossier.website.description}
+                        </p>
+                      ) : null}
+                      {analysisResult.dossier.website.checkedUrls.length ? (
+                        <p className="text-[11px] text-slate-600">
+                          URLs revisadas: {analysisResult.dossier.website.checkedUrls.join(", ")}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Contacto
+                      </h4>
+                      <p className="text-slate-300">
+                        Teléfonos: {analysisResult.dossier.contacts.phones.join(", ") || "—"}
+                        <br />
+                        WhatsApp: {analysisResult.dossier.contacts.whatsapp.join(", ") || "—"}
+                        <br />
+                        Emails: {analysisResult.dossier.contacts.emails.join(", ") || "—"}
+                        <br />
+                        Formularios: {analysisResult.dossier.contacts.contactForms.length ? "sí" : "no detectado"}
+                      </p>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Redes sociales
+                      </h4>
+                      <p className="text-slate-300">
+                        Instagram: {analysisResult.dossier.social.instagram.join(", ") || "—"}
+                        <br />
+                        Facebook: {analysisResult.dossier.social.facebook.join(", ") || "—"}
+                        <br />
+                        TikTok / LinkedIn / YouTube:{" "}
+                        {[
+                          ...analysisResult.dossier.social.tiktok,
+                          ...analysisResult.dossier.social.linkedin,
+                          ...analysisResult.dossier.social.youtube,
+                        ].join(", ") || "—"}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Un perfil encontrado no implica actividad verificada.
+                      </p>
+                    </section>
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Ecommerce y catálogo
+                      </h4>
+                      <p className="text-slate-300">
+                        Tienda online: {STATUS_META[analysisResult.dossier.commerce.ecommerce].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.ecommerce].label} · Catálogo:{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.catalog].icon}{" "}
+                        {STATUS_META[analysisResult.dossier.commerce.catalog].label}
+                      </p>
+                      {analysisResult.dossier.commerce.markers.length ? (
+                        <p className="text-[11px] text-slate-600">
+                          Señales: {analysisResult.dossier.commerce.markers.join(", ")}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    {analysisResult.dossier.google ? (
+                      <section className="space-y-1">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          Google Places
+                        </h4>
+                        <p className="text-slate-300">
+                          {analysisResult.dossier.google.placeId
+                            ? "Coincidencia: " + analysisResult.dossier.google.placeId
+                            : "Sin coincidencia confirmada"}
+                          {analysisResult.dossier.google.rating !== undefined
+                            ? " · puntuación " +
+                              analysisResult.dossier.google.rating +
+                              (analysisResult.dossier.google.ratingCount !== undefined
+                                ? " (" + analysisResult.dossier.google.ratingCount + " reseñas)"
+                                : "")
+                            : " · sin puntuación informada"}
+                          {analysisResult.dossier.google.businessStatus
+                            ? " · " + analysisResult.dossier.google.businessStatus
+                            : ""}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          Candidatos evaluados: {analysisResult.dossier.google.candidatesFound}
+                        </p>
+                      </section>
+                    ) : null}
+
+                    <section className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Cobertura de evidencia
+                      </h4>
+                      <p className="text-slate-300">
+                        {analysisResult.dossier.coverage.supported}/
+                        {analysisResult.dossier.coverage.total} campos respaldados (
+                        {analysisResult.dossier.coverage.score})
+                        {analysisResult.coverageBefore ? (
+                          <>
+                            {" · antes del descubrimiento: "}
+                            {analysisResult.coverageBefore.supported}/
+                            {analysisResult.coverageBefore.total}
+                          </>
+                        ) : null}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Buscados: {analysisResult.dossier.coverage.searched} · no buscados:{" "}
+                        {analysisResult.dossier.coverage.notSearched} · buscados sin resultado:{" "}
+                        {analysisResult.dossier.coverage.notFound} · inferidos:{" "}
+                        {analysisResult.dossier.coverage.inferred} · en conflicto:{" "}
+                        {analysisResult.dossier.coverage.conflicting}
+                      </p>
+                      <p className="text-[10px] text-slate-600">
+                        {analysisResult.dossier.coverage.formula}
+                      </p>
+                    </section>
+                  </>
+                ) : null}
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Evidencias
+                  </h4>
+                  {analysisResult.evidence.length === 0 ? (
+                    <p className="text-slate-500">Sin evidencia registrada todavía.</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {analysisResult.evidence.map((item, index) => (
+                        <li
+                          key={item.field + "-" + item.status + "-" + index}
+                          className="flex items-start gap-2"
+                        >
+                          <span
+                            className="shrink-0 font-mono text-[11px] w-4 text-center"
+                            title={STATUS_META[item.status].label}
+                          >
+                            {STATUS_META[item.status].icon}
+                          </span>
+                          <span className="text-slate-300">
+                            <strong className="text-slate-200">{FIELD_LABELS_ES[item.field] || item.field}</strong>
+                            {" — "}
+                            <span className="text-slate-400">{STATUS_META[item.status].label}</span>
+                            {item.value !== undefined && item.value !== null && item.value !== ""
+                              ? ": " + String(item.value).slice(0, 80)
+                              : ""}
+                            <span className="text-slate-500">
+                              {" · "}
+                              {SOURCE_LABELS_ES[item.source] || item.source}
+                              {item.sourceUrl ? " · " + item.sourceUrl.slice(0, 60) : ""}
+                              {" · confianza "}
+                              {item.confidence}
+                            </span>
+                            {item.notes ? (
+                              <span className="text-slate-600"> · {item.notes}</span>
+                            ) : null}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Fuentes consultadas
+                  </h4>
+                  <p className="text-slate-400">
+                    {(analysisResult.signals?.consultedSources || []).join(", ") ||
+                      "sin fuentes registradas"}
+                  </p>
+                  {analysisResult.enrichment.checkedUrls.length > 0 && (
+                    <p className="text-[11px] text-slate-500">
+                      URLs revisadas: {analysisResult.enrichment.checkedUrls.join(", ")}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Resultado Jev (clasificador rápido)
+                  </h4>
+                  {analysisResult.jev ? (
+                    analysisResult.jev.ok ? (
+                      <p className="text-slate-300">
+                        Ruteo:{" "}
+                        <strong className="text-emerald-300">
+                          {analysisResult.jev.routing}
+                        </strong>{" "}
+                        · modelo {analysisResult.jev.model} ·{" "}
+                        {analysisResult.jev.latencyMs} ms
+                        {analysisResult.jev.primaryGap
+                          ? " · brecha principal: " + analysisResult.jev.primaryGap.choice
+                          : ""}
+                        <br />
+                        <span className="text-[11px] text-slate-500">
+                          {analysisResult.jev.routingReason}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-amber-200">{analysisResult.jev.error}</p>
+                    )
+                  ) : (
+                    <p className="text-slate-500">
+                      Jev no se ejecutó en este análisis.
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Análisis con IA
+                  </h4>
+                  {analysisResult.analysis?.ok ? (
+                    <p className="text-slate-300">
+                      Modelo {analysisResult.analysis.model} ·{" "}
+                      {analysisResult.analysis.latencyMs} ms · cobertura de evidencia{" "}
+                      {analysisResult.analysis.evidenceCoverage.supported}/
+                      {analysisResult.analysis.evidenceCoverage.total} (
+                      {analysisResult.analysis.evidenceCoverage.score})
+                      <br />
+                      <span className="text-[11px] text-slate-500">
+                        Campos citados:{" "}
+                        {analysisResult.analysis.evidenceUsed.join(", ") || "ninguno"}
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-amber-200">
+                      {analysisResult.analysis?.error || "No se ejecutó el análisis."}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Oportunidad detectada
+                  </h4>
+                  {analysisResult.analysis?.opportunityDetected ? (
+                    <p className="text-slate-300">
+                      <strong className="text-emerald-300">
+                        {analysisResult.analysis.opportunityType || "oportunidad"}
+                      </strong>
+                      {analysisResult.analysis.problemDetected
+                        ? " · " + analysisResult.analysis.problemDetected
+                        : ""}
+                    </p>
+                  ) : (
+                    <p className="text-slate-400">
+                      No se detectó una oportunidad suficientemente clara.
+                      {analysisResult.analysis?.problemDetected
+                        ? " " + analysisResult.analysis.problemDetected
+                        : ""}
+                    </p>
+                  )}
+                </section>
+
+                <section className="space-y-1">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Solución propuesta
+                  </h4>
+                  <p className="text-slate-300">
+                    {analysisResult.analysis?.proposedSolution || "Sin propuesta."}
+                  </p>
+                  {analysisResult.analysis?.recommendedProducts?.length ? (
+                    <p className="text-[11px] text-slate-500">
+                      Productos sugeridos:{" "}
+                      {analysisResult.analysis.recommendedProducts.join(", ")}
+                    </p>
+                  ) : null}
+                  {analysisResult.analysis?.reasoning && (
+                    <p className="text-[11px] text-slate-500">
+                      Razonamiento: {analysisResult.analysis.reasoning}
+                    </p>
+                  )}
+                </section>
+
+                <p className="text-[10px] text-slate-600">
+                  Análisis {analysisResult.logId || "sin id"} ·{" "}
+                  {analysisResult.durationMs} ms · etapa final{" "}
+                  {analysisResult.stage}
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/[0.08]">
+            <span className="text-[10px] text-slate-500 mr-auto">
+              Analizar no es contactar: el envío sigue siendo manual.
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAnalysisLead(null)}
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              Cerrar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isClearModalOpen} onOpenChange={setIsClearModalOpen}>
         <DialogContent className="bg-[#0f0f18] border-white/10 text-white max-w-md">
           <DialogHeader>

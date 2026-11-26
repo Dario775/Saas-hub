@@ -52,15 +52,15 @@ export interface CreativeDirectorInput {
 
 // Modelo al que rutea cada hint (cada modelo hace lo que mejor sabe)
 export const ROUTER: Record<Concept["modelHint"], ImageGenerator> = {
-  escena: "z-image-turbo", // Z-Image-Turbo / FLUX Schnell
-  fotorealista: "z-image-turbo", // Z-Image-Turbo (realismo y velocidad)
-  texto: "z-image-turbo", // Z-Image-Turbo (con Qwen 3.4B text encoder) / Ideogram 4
+  escena: "z-image-turbo",
+  fotorealista: "flux-2-klein",
+  texto: "qwen-image-2.1", // el único local que escribió bien el español en las pruebas
 };
 
 export const ROUTER_REASON: Record<Concept["modelHint"], string> = {
-  escena: "Z-Image-Turbo — renderizado ultra rápido y composición publicitaria",
-  fotorealista: "Z-Image-Turbo — realismo fotográfico de sujetos y texturas de piel",
-  texto: "Z-Image-Turbo — renderizado tipográfico nítido y consistente",
+  escena: "Z-Image-Turbo — composición publicitaria con espacio para el texto",
+  fotorealista: "FLUX 2 Klein — realismo fotográfico de personas y productos",
+  texto: "Qwen Image 2.1 — texto en español integrado en la imagen",
 };
 
 export function buildDirectorSystemPrompt(input: CreativeDirectorInput): string {
@@ -120,6 +120,8 @@ ${languageRules}
 - Composición con espacio negativo limpio para texto publicitario.
 - Iluminación cinematográfica de estudio (softbox, rim light, 35mm lens, 8k resolution).
 - Integra sutilmente la paleta de colores de la marca (${primaryNames}).
+- El titular se agrega después en el editor: NO pidas letras, textos ni logos dentro de la imagen, salvo que uses modelHint "texto".
+- **modelHint**: "fotorealista" si el protagonista es una persona o un producto; "texto" SOLO si las letras forman parte de la escena (neón, cartel, globos); "escena" en los demás casos.
 - NUNCA uses palabras como "flyer", "brochure", "mockup", "poster" ni "UI" en el prompt visual. Describe el sujeto físico y real.
 
 === REGLAS DE SALIDA ===
@@ -135,7 +137,7 @@ Responde ÚNICAMENTE con un objeto JSON válido con la clave "concepts":
       "visualPrompt": "detailed cinematic commercial photography prompt in ENGLISH with clean negative space, 35mm lens, studio lighting",
       "negativePrompt": "watermark, blurry, low quality, distorted text, deformed letters, malformed typography, warped font, bad anatomy",
       "caption": "${isEnglish ? 'Engaging social media post copy in English with emojis and hashtags' : 'Copy publicitario completo en español con emojis y hashtags'}",
-      "modelHint": "escena"
+      "modelHint": "escena | fotorealista | texto"
     }
   ]
 }`;
@@ -145,18 +147,21 @@ Responde ÚNICAMENTE con un objeto JSON válido con la clave "concepts":
 export function adaptPromptForModel(concept: Concept, generatorId: ImageGenerator): string {
   const base = concept.visualPrompt.trim();
 
-  if (generatorId === "z-image-turbo") {
-    const textDirective = concept.headline
-      ? `, commercial advertising layout with clean empty copy space, featuring bold clean 2D vector typography text overlay reading "${concept.headline.trim().replace(/"/g, "'").toUpperCase()}" in razor-sharp, perfectly formed readable lettering with flawless glyph shapes and distinct crisp contours, zero letter distortion`
-      : `, commercial advertising layout with clean empty copy space for design`;
-    return `${base}${textDirective}, professional commercial photography, natural skin texture, sharp focus, 8k resolution, shot on 35mm lens`;
+  // El titular lo pone el editor: pedirlo acá lo deforma.
+  const cleanSpace = "clean empty copy space for a headline, no text, no letters, no logos";
+
+  if (generatorId === "qwen-image-2.1") {
+    return concept.headline
+      ? `${base}, featuring the text "${concept.headline.trim().replace(/"/g, "'")}" integrated in the scene, clearly legible`
+      : base;
   }
 
-  if (generatorId === "flux-schnell" || generatorId === "flux-dev" || generatorId === "flux-2-klein") {
-    const textDirective = concept.headline
-      ? `, advertising layout with crisp vector typography text reading "${concept.headline.trim().replace(/"/g, "'").toUpperCase()}", perfectly formed clean letters, high legibility`
-      : "";
-    return `${base}${textDirective}, cinematic photography, dramatic studio lighting, premium composition, ultra detailed, sharp focus, 8k, professional advertising`;
+  if (generatorId === "z-image-turbo" || generatorId === "flux-2-klein") {
+    return `${base}, ${cleanSpace}, professional commercial photography, natural skin texture, sharp focus, shot on 35mm lens`;
+  }
+
+  if (generatorId === "flux-schnell" || generatorId === "flux-dev") {
+    return `${base}, ${cleanSpace}, cinematic photography, dramatic studio lighting, premium composition, sharp focus`;
   }
 
   if (generatorId === "realvis-xl") {

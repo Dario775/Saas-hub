@@ -13,7 +13,7 @@ export const NAV = [
   { id: "publish", label: "Publicar", icon: "📢", color: "blue" },
 ] as const;
 
-export type TabId = (typeof NAV)[number]["id"] | "brandkit" | "overview";
+export type TabId = (typeof NAV)[number]["id"] | "brandkit" | "overview" | "flyers";
 
 export const BRAND_LOGOS = {
   obsidiana: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">

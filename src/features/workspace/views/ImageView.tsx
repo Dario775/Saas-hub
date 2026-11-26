@@ -12,6 +12,7 @@ SelectValue,
 import { Textarea } from "@/components/ui/textarea";
 import {
 GENERATORS,
+writesReliableText,
 IMAGE_STYLES,
 type ImageGenerator,
 } from "@/lib/generators";
@@ -910,6 +911,13 @@ export default function ImageView({
                           <p className="text-[10px] text-slate-600">
                             Título principal en la imagen (máx 3-4 palabras)
                           </p>
+                          {imageText.trim() && !writesReliableText(selectedGenerator) && (
+                            <p className="text-[10px] text-amber-400">
+                              {GENERATORS[selectedGenerator].name} suele deformar el texto en
+                              español. Usá Qwen Image 2.1, o dejá este campo vacío y escribí el
+                              título en el editor de diseño.
+                            </p>
+                          )}
                         </div>
 
                         <div className="space-y-2">
