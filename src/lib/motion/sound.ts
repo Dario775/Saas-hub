@@ -1,12 +1,30 @@
-import { createHash } from "node:crypto";
+import type { MotionStyle } from "./styles";
+import {
+  bass,
+  clap,
+  crackle,
+  createTrack,
+  fadeOut,
+  hat,
+  impact,
+  kick,
+  noiseSource,
+  pad,
+  pluck,
+  randomSource,
+  riser,
+  swoosh,
+  toWav,
+  type Track,
+} from "./synth";
+
+export { SAMPLE_RATE } from "./synth";
 
 /**
  * Banda sonora generada en código, sobre la misma grilla de tiempos que la
- * animación: golpes en los tiempos, subida antes de la placa final e impacto
- * cuando entra la marca. No usa archivos ni servicios: siempre se puede usar.
+ * animación. Cada estilo tiene su arreglo; cada video, su tonalidad y su
+ * secuencia de acordes (según la semilla), así que no se repite.
  */
-export const SAMPLE_RATE = 44_100;
-const PEAK = 0.89;
 const BEATS_PER_BAR = 4;
 
 export interface SoundtrackPlan {
@@ -20,212 +38,137 @@ export interface SoundtrackPlan {
   seed: string;
   /** Momentos en que algo aterriza (las palabras del gancho): barrido y golpe suave. */
   accents?: number[];
+  style?: MotionStyle;
 }
 
-interface Track {
-  left: Float32Array;
-  right: Float32Array;
-}
-
-/** Generador pseudoaleatorio con semilla (mulberry32): el ruido sale igual siempre. */
-function noiseSource(seed: string): () => number {
-  let state = createHash("sha256").update(seed).digest().readUInt32BE(0);
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let value = Math.imul(state ^ (state >>> 15), 1 | state);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return (((value ^ (value >>> 14)) >>> 0) / 4294967296) * 2 - 1;
-  };
-}
-
-/** Suma una voz al track. `voice` devuelve la muestra para el segundo t desde su inicio. */
-function addVoice(track: Track, start: number, length: number, voice: (t: number) => number, pan = 0): void {
-  const from = Math.max(0, Math.round(start * SAMPLE_RATE));
-  const to = Math.min(track.left.length, Math.round((start + length) * SAMPLE_RATE));
-  const leftGain = Math.min(1, 1 - pan);
-  const rightGain = Math.min(1, 1 + pan);
-  for (let index = from; index < to; index++) {
-    const sample = voice((index - from) / SAMPLE_RATE);
-    track.left[index] += sample * leftGain;
-    track.right[index] += sample * rightGain;
-  }
-}
-
-function kick(track: Track, at: number, gain: number): void {
-  let phase = 0;
-  addVoice(track, at, 0.45, (t) => {
-    phase += (2 * Math.PI * (44 + 110 * Math.exp(-t * 30))) / SAMPLE_RATE;
-    return Math.sin(phase) * Math.exp(-t * 8) * gain;
-  });
-}
-
-function hat(track: Track, at: number, gain: number, noise: () => number, pan: number): void {
-  let previous = 0;
-  addVoice(
-    track,
-    at,
-    0.07,
-    (t) => {
-      const sample = noise();
-      const high = sample - previous;
-      previous = sample;
-      return high * Math.exp(-t * 75) * gain;
-    },
-    pan,
-  );
-}
-
-function clap(track: Track, at: number, gain: number, noise: () => number): void {
-  let low = 0;
-  addVoice(track, at, 0.25, (t) => {
-    const sample = noise();
-    low += 0.35 * (sample - low);
-    // Tres rebotes cortos y una cola: suena a palmas, no a ruido.
-    const burst = t < 0.03 ? 0.6 + 0.4 * Math.cos(t * 2 * Math.PI * 100) : 1;
-    return (sample - low) * burst * Math.exp(-t * 18) * gain;
-  });
-}
-
-/** Acordes suaves: Am, F, C, G. Dos osciladores apenas desafinados abren el estéreo. */
-const CHORDS = [
-  [110, 130.81, 164.81],
-  [87.31, 110, 130.81],
-  [130.81, 164.81, 196],
-  [98, 123.47, 146.83],
+type Quality = "M" | "m";
+/** Secuencias de acordes: grado (semitonos desde la tónica) y calidad. */
+const PROGRESSIONS: Array<Array<[number, Quality]>> = [
+  [[0, "m"], [8, "M"], [3, "M"], [10, "M"]], // i VI III VII
+  [[0, "M"], [7, "M"], [9, "m"], [5, "M"]], // I V vi IV
+  [[9, "m"], [5, "M"], [0, "M"], [7, "M"]], // vi IV I V
+  [[0, "m"], [5, "m"], [10, "M"], [3, "M"]], // i iv VII III
+  [[0, "M"], [9, "m"], [5, "M"], [7, "M"]], // I vi IV V
 ];
 
-function pad(track: Track, at: number, length: number, chord: number[], gain: number, beat: number, duck: boolean): void {
-  const attack = 0.25;
-  const release = Math.min(0.5, length / 2);
-  for (const [index, frequency] of chord.entries()) {
-    for (const side of [-1, 1]) {
-      const detuned = frequency + side * 0.7;
-      addVoice(
-        track,
-        at,
-        length,
-        (t) => {
-          const envelope = Math.min(1, t / attack) * Math.min(1, (length - t) / release);
-          // El acorde se agacha en cada golpe: le deja lugar al bombo.
-          const sinceBeat = t % (beat * 2);
-          const pump = duck ? 1 - 0.55 * Math.exp(-sinceBeat * 9) : 1;
-          const tone = Math.sin(2 * Math.PI * detuned * t) + 0.25 * Math.sin(4 * Math.PI * detuned * t);
-          return tone * envelope * pump * gain * (index === 0 ? 1.2 : 1);
-        },
-        side * 0.6,
-      );
-    }
-  }
+/** Lleva una nota al registro pedido sin cambiar su nombre. */
+function fold(note: number, low: number): number {
+  let value = note;
+  while (value < low) value += 12;
+  while (value >= low + 12) value -= 12;
+  return value;
 }
 
-/** Ruido que se abre y sube de tono hasta la placa final. */
-function riser(track: Track, from: number, to: number, noise: () => number): void {
-  const length = to - from;
-  if (length <= 0.2) return;
-  let low = 0;
-  let phase = 0;
-  addVoice(track, from, length, (t) => {
-    const progress = t / length;
-    low += (0.02 + 0.5 * progress * progress) * (noise() - low);
-    phase += (2 * Math.PI * (220 + 900 * progress * progress)) / SAMPLE_RATE;
-    return (low * 0.9 + Math.sin(phase) * 0.12) * progress * progress * 0.55;
-  });
+interface Harmony {
+  chords: number[][];
+  roots: number[];
 }
 
-/** Golpe grave con cola: marca un cambio de escena. */
-function impact(track: Track, at: number, gain: number, noise: () => number): void {
-  kick(track, at, 1.1 * gain);
-  let low = 0;
-  addVoice(track, at, 1.4, (t) => {
-    low += 0.08 * (noise() - low);
-    const boom = Math.sin(2 * Math.PI * 48 * t) * Math.exp(-t * 2.6) * 0.7;
-    return (low * 2.2 * Math.exp(-t * 5) + boom) * gain;
-  });
+function harmony(random: () => number): Harmony {
+  const progression = PROGRESSIONS[Math.floor(random() * PROGRESSIONS.length)];
+  const key = 45 + Math.floor(random() * 7) - 3; // La ± 3 semitonos
+  const chords = progression.map(([degree, quality]) =>
+    [0, quality === "M" ? 4 : 3, 7].map((interval) => fold(key + degree + interval, 45)).sort((a, b) => a - b),
+  );
+  return { chords, roots: progression.map(([degree]) => fold(key + degree, 33)) };
 }
 
-/** Barrido de aire que termina justo cuando algo aterriza. */
-function swoosh(track: Track, end: number, noise: () => number): void {
-  const length = Math.min(0.7, end);
-  let low = 0;
-  addVoice(track, end - length, length + 0.12, (t) => {
-    const progress = Math.min(1, t / length);
-    low += (0.04 + 0.3 * progress) * (noise() - low);
-    const tail = t > length ? Math.exp(-(t - length) * 30) : 1;
-    return low * Math.pow(progress, 3) * tail * 0.9;
-  });
+interface Grid {
+  beat: number;
+  bar: number;
+  /** Desde acá, un compás de tensión sin percusión hasta la marca. */
+  dropAt: number;
+  plan: SoundtrackPlan;
 }
 
-function addBed(track: Track, plan: SoundtrackPlan, noise: () => number): void {
+function grid(plan: SoundtrackPlan): Grid {
   const beat = 60 / plan.bpm;
   const bar = beat * BEATS_PER_BAR;
-  // El último compás antes de la marca queda solo con la subida: tensión.
-  const dropAt = Math.max(bar, plan.outroStart - bar);
-  for (let start = 0, index = 0; start < plan.duration; start += bar, index++) {
-    const length = Math.min(bar, plan.duration - start);
-    pad(track, start, length + 0.05, CHORDS[index % CHORDS.length], 0.05, beat, start < dropAt);
-  }
-  const beats = Math.floor(plan.duration / beat);
+  return { beat, bar, dropAt: Math.max(bar, plan.outroStart - bar), plan };
+}
+
+/** Recorre cada tiempo: `at` en segundos, `step` número de tiempo, `playing` fuera del compás de tensión. */
+function eachBeat(g: Grid, visit: (at: number, step: number, playing: boolean) => void): void {
+  const beats = Math.floor(g.plan.duration / g.beat);
   for (let step = 0; step < beats; step++) {
-    const at = step * beat;
-    const inBar = step % BEATS_PER_BAR;
-    const playing = at < dropAt || at >= plan.outroStart;
-    if (playing && (inBar === 0 || inBar === 2)) kick(track, at, 0.9);
-    if (playing && at > 0 && (inBar === 1 || inBar === 3)) clap(track, at, 0.32, noise);
-    if (at < plan.outroStart) hat(track, at + beat / 2, 0.16, noise, step % 2 ? 0.35 : -0.35);
+    const at = step * g.beat;
+    visit(at, step, at < g.dropAt || at >= g.plan.outroStart);
   }
 }
 
-function fadeEdges(track: Track, duration: number): void {
-  const fade = Math.round(0.4 * SAMPLE_RATE);
-  const total = Math.min(track.left.length, Math.round(duration * SAMPLE_RATE));
-  for (let index = Math.max(0, total - fade); index < total; index++) {
-    const gain = (total - index) / fade;
-    track.left[index] *= gain;
-    track.right[index] *= gain;
-  }
+function eachBar(g: Grid, visit: (at: number, index: number, length: number) => void): void {
+  for (let at = 0, index = 0; at < g.plan.duration; at += g.bar, index++) visit(at, index, Math.min(g.bar, g.plan.duration - at) + 0.05);
 }
 
-function toWav(track: Track): Buffer {
-  let peak = 0;
-  for (let index = 0; index < track.left.length; index++)
-    peak = Math.max(peak, Math.abs(track.left[index]), Math.abs(track.right[index]));
-  const scale = peak > 0 ? PEAK / peak : 0;
-  const frames = track.left.length;
-  const buffer = Buffer.alloc(44 + frames * 4);
-  buffer.write("RIFF", 0);
-  buffer.writeUInt32LE(36 + frames * 4, 4);
-  buffer.write("WAVEfmt ", 8);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(2, 22);
-  buffer.writeUInt32LE(SAMPLE_RATE, 24);
-  buffer.writeUInt32LE(SAMPLE_RATE * 4, 28);
-  buffer.writeUInt16LE(4, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write("data", 36);
-  buffer.writeUInt32LE(frames * 4, 40);
-  for (let index = 0; index < frames; index++) {
-    buffer.writeInt16LE(Math.round(track.left[index] * scale * 32767), 44 + index * 4);
-    buffer.writeInt16LE(Math.round(track.right[index] * scale * 32767), 46 + index * 4);
-  }
-  return buffer;
-}
+const ARRANGEMENTS: Record<MotionStyle, (track: Track, g: Grid, h: Harmony, noise: () => number, random: () => number) => void> = {
+  /** House: bombo en cada tiempo, platillo abierto a contratiempo, bajo saltando. */
+  energetico(track, g, h, noise) {
+    eachBar(g, (at, index, length) => pad(track, at, length, h.chords[index % 4], 0.035, at < g.dropAt ? g.beat : 0));
+    eachBeat(g, (at, step, playing) => {
+      const chord = Math.floor(at / g.bar) % 4;
+      if (playing) kick(track, at, 0.95, 1.1);
+      if (playing && step % 2 === 1) clap(track, at, 0.3, noise);
+      if (at < g.plan.outroStart) hat(track, at + g.beat / 2, 0.2, noise, step % 2 ? 0.3 : -0.3, 22);
+      if (playing) bass(track, at + g.beat / 2, h.roots[chord], g.beat * 0.45, 0.2);
+    });
+  },
+  /** Pop: bombo en 1 y 3, palmas en 2 y 4, acordes amplios. */
+  equilibrado(track, g, h, noise) {
+    eachBar(g, (at, index, length) => pad(track, at, length, h.chords[index % 4], 0.05, at < g.dropAt ? g.beat * 2 : 0));
+    eachBeat(g, (at, step, playing) => {
+      const chord = Math.floor(at / g.bar) % 4;
+      const inBar = step % BEATS_PER_BAR;
+      if (playing && (inBar === 0 || inBar === 2)) kick(track, at, 0.9);
+      if (playing && at > 0 && (inBar === 1 || inBar === 3)) clap(track, at, 0.32, noise);
+      if (at < g.plan.outroStart) hat(track, at + g.beat / 2, 0.16, noise, step % 2 ? 0.35 : -0.35);
+      if (playing && inBar === 0) bass(track, at, h.roots[chord], g.beat * 1.8, 0.16);
+    });
+  },
+  /** Corporativo: arpegios limpios en corcheas, percusión liviana. */
+  corporativo(track, g, h, noise) {
+    eachBar(g, (at, index, length) => pad(track, at, length, h.chords[index % 4], 0.025, 0, true));
+    eachBeat(g, (at, step, playing) => {
+      const chord = h.chords[Math.floor(at / g.bar) % 4];
+      const inBar = step % BEATS_PER_BAR;
+      if (playing && (inBar === 0 || inBar === 2)) kick(track, at, 0.6, 0.8);
+      for (let half = 0; half < 2; half++) {
+        const note = chord[(step * 2 + half) % chord.length] + 12;
+        pluck(track, at + (half * g.beat) / 2, note, 0.12, 5, half ? 0.25 : -0.25);
+        if (at < g.plan.outroStart) hat(track, at + (half * g.beat) / 2, 0.05, noise, 0.2, 120);
+      }
+    });
+  },
+  /** Lo-fi: tempo lento, redoblante apagado, platillos con swing y crujido de vinilo. */
+  tranquilo(track, g, h, noise, random) {
+    eachBar(g, (at, index, length) => pad(track, at, length, h.chords[index % 4], 0.06, 0, true));
+    crackle(track, g.plan.duration, random);
+    eachBeat(g, (at, step, playing) => {
+      const chord = h.chords[Math.floor(at / g.bar) % 4];
+      const inBar = step % BEATS_PER_BAR;
+      if (playing && inBar === 0) kick(track, at, 0.8, 0.7);
+      if (playing && inBar === 2) kick(track, at + g.beat / 2, 0.6, 0.7);
+      if (playing && (inBar === 1 || inBar === 3)) clap(track, at, 0.24, noise, 1);
+      if (at < g.plan.outroStart) hat(track, at + g.beat * 0.62, 0.08, noise, 0.2, 60);
+      if (inBar % 2 === 0) pluck(track, at, chord[(step / 2) % chord.length] + 12, 0.07, 3);
+    });
+  },
+};
 
 /** WAV estéreo de 16 bits con la banda sonora del video. */
 export function buildSoundtrack(plan: SoundtrackPlan): Buffer {
-  const frames = Math.ceil(plan.duration * SAMPLE_RATE);
-  const track: Track = { left: new Float32Array(frames), right: new Float32Array(frames) };
+  const track = createTrack(plan.duration);
   const noise = noiseSource(plan.seed);
-  const bar = (60 / plan.bpm) * BEATS_PER_BAR;
-  if (plan.bed) addBed(track, plan, noise);
+  const random = randomSource(plan.seed);
+  const g = grid(plan);
+  if (plan.bed) ARRANGEMENTS[plan.style ?? "equilibrado"](track, g, harmony(random), noise, random);
   impact(track, 0, plan.bed ? 0.5 : 0.35, noise);
   for (const at of plan.accents ?? []) {
     if (at <= 0 || at >= plan.outroStart) continue;
     swoosh(track, at, noise);
     impact(track, at, 0.3, noise);
   }
-  riser(track, Math.max(0, plan.outroStart - bar), plan.outroStart, noise);
+  riser(track, Math.max(0, plan.outroStart - g.bar), plan.outroStart, noise);
   impact(track, plan.outroStart, 1, noise);
-  fadeEdges(track, plan.duration);
+  fadeOut(track, plan.duration);
   return toWav(track);
 }

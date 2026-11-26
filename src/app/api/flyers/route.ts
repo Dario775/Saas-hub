@@ -1,10 +1,9 @@
-import type { BrandConfig } from "@/features/workspace/config";
+import { loadFlyerBrand } from "@/lib/flyers/brand";
 import { animateFlyer, readVideoSeconds } from "@/lib/flyers/motion";
+import { readStyleChoice } from "@/lib/motion/styles";
 import { exportFlyer, reviseFlyer, startFlyerJob, visibleJobs } from "@/lib/flyers/pipeline";
-import { FLYER_SIZES, type FlyerBrand, type FlyerFormat } from "@/lib/flyers/types";
-import { readJson } from "@/lib/json-store";
+import { FLYER_SIZES, type FlyerFormat } from "@/lib/flyers/types";
 import { NextRequest, NextResponse } from "next/server";
-import path from "node:path";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,24 +19,7 @@ function fail(error: unknown, status = 400) {
   );
 }
 
-function loadBrand(id: unknown): FlyerBrand {
-  const brands = readJson<BrandConfig[]>(path.join(process.cwd(), "brands.json"), []);
-  const brand = brands.find((item) => item.id === id);
-  if (!brand) throw new Error("Completá y guardá la identidad de esta marca antes de crear flyers.");
-  return {
-    id: brand.id,
-    name: brand.name,
-    website: brand.websiteUrl || "",
-    description: brand.projectDescription || "",
-    audience: brand.targetAudience || "",
-    valueProposition: brand.valueProposition || "",
-    voice: brand.voiceTone || "",
-    primary: brand.colors.primary[0] || "",
-    accent: brand.colors.secondary?.[0] || brand.colors.primary[1] || brand.colors.primary[0] || "",
-    headingFont: brand.typography?.heading || "",
-    logoDataUrl: brand.logoDataUrl,
-  };
-}
+const loadBrand = loadFlyerBrand;
 
 function readText(value: unknown, max: number, missing: string): string {
   const clean = typeof value === "string" ? value.trim() : "";
@@ -75,6 +57,7 @@ export async function POST(request: NextRequest) {
         brand,
         seconds: readVideoSeconds(body.seconds),
         music: body.music !== false,
+        style: readStyleChoice(body.style),
       });
       return NextResponse.json({ success: true, job }, { status: 202 });
     }

@@ -6,4 +6,9 @@ export async function register() {
     return;
   const { startScheduler } = await import("./lib/scheduler");
   startScheduler();
+  // El bot y todo lo que usa se cargan solo si está configurado.
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    const { startTelegramBot } = await import("./lib/telegram/bot");
+    startTelegramBot();
+  }
 }

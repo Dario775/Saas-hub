@@ -1,3 +1,4 @@
+import type { MotionStyle } from "../motion/styles";
 export type FlyerTone = "claro" | "oscuro" | "acento";
 export const FLYER_TONES: readonly FlyerTone[] = ["claro", "oscuro", "acento"];
 
@@ -67,6 +68,14 @@ export interface FlyerVideo {
   music: boolean;
   /** Si usó una pista de la carpeta de música. */
   track?: boolean;
+  /** Estilo con el que se armó (tempo y música). */
+  style?: MotionStyle;
+  /** Lo diseñó Claude desde cero ("a medida"). */
+  custom?: boolean;
+  /** Idea visual que eligió Claude. */
+  concept?: string;
+  /** Paso en curso mientras se arma. */
+  step?: string;
   /** Ruta pública del MP4, lista para mostrar y publicar. */
   url?: string;
   error?: string;

@@ -2,6 +2,7 @@
 
 import { designFromFlyer } from "@/components/composer/flyer-design";
 import { CLAUDE_MODELS } from "@/lib/claude-models";
+import type { MotionStyleChoice } from "@/lib/motion/styles";
 import type { FlyerExport } from "@/lib/flyers/flyer-layers";
 import type { Flyer, FlyerFormat, FlyerJob } from "@/lib/flyers/types";
 import { Download, Loader2, Send, Wand2 } from "lucide-react";
@@ -104,9 +105,9 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
     }
   }
 
-  async function handleAnimate(job: FlyerJob, flyer: Flyer, seconds: number, music: boolean) {
+  async function handleAnimate(job: FlyerJob, flyer: Flyer, seconds: number, music: boolean, style: MotionStyleChoice) {
     try {
-      const updated = await send({ action: "animate", jobId: job.id, flyerId: flyer.id, seconds, music });
+      const updated = await send({ action: "animate", jobId: job.id, flyerId: flyer.id, seconds, music, style });
       if (updated) setJobs((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       toast.success("Animando el flyer", { description: "El video tarda menos de un minuto." });
     } catch (error) {
@@ -256,7 +257,7 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
                 disabled={running || revisingId !== null}
                 onRevise={(instruction) => handleRevise(job, flyer, instruction)}
                 onPublish={(media) => void handlePublish(flyer, media)}
-                onAnimate={(seconds, music) => handleAnimate(job, flyer, seconds, music)}
+                onAnimate={(seconds, music, style) => handleAnimate(job, flyer, seconds, music, style)}
                 onEdit={() => handleEdit(job, flyer)}
                 icons={{ download: <Download size={14} />, publish: <Send size={14} /> }}
               />

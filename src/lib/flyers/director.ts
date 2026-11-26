@@ -21,9 +21,12 @@ export function createAsk(model: string): { ask: Ask; canSee: boolean } {
       ask: (system, user, image) =>
         queryClaude({ model, system, user, image, expectJson: true, timeoutMs: image ? REVIEW_TIMEOUT_MS : DIRECTOR_TIMEOUT_MS }),
     };
+  // "ollama:modelo" fuerza el modelo local, sin importar la IA activa del panel.
+  const local = /^ollama:(.+)$/.exec(model);
+  const settings = local ? { provider: "ollama" as const, ollamaModel: local[1] } : undefined;
   return {
     canSee: false,
-    ask: (system, user) => queryLLM(system, user, undefined, true, { timeoutMs: DIRECTOR_TIMEOUT_MS }),
+    ask: (system, user) => queryLLM(system, user, settings, true, { timeoutMs: DIRECTOR_TIMEOUT_MS }),
   };
 }
 

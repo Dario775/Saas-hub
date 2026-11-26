@@ -66,3 +66,6 @@ next-env.d.ts
 
 # Música libre de derechos para los videos (la elige cada uno)
 /motion-music/
+
+# Datos del agente de Telegram (campañas, audios temporales, estado del bot)
+/agent-data/

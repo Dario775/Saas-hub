@@ -4,7 +4,7 @@ import { findClaudeModel } from "./claude-models";
 const MAX_OUTPUT_TOKENS = 32_000;
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-type Effort = (typeof EFFORTS)[number];
+export type Effort = (typeof EFFORTS)[number];
 const DEFAULT_EFFORT: Effort = "medium";
 
 export interface ClaudeRequest {
@@ -16,6 +16,10 @@ export interface ClaudeRequest {
   apiKey?: string;
   expectJson?: boolean;
   timeoutMs?: number;
+  /** Razonamiento para esta consulta; si falta, el general (CLAUDE_API_EFFORT). */
+  effort?: Effort;
+  /** Imagen PNG en lugar de JPEG. */
+  imageType?: "image/jpeg" | "image/png";
   /** Inyectable para tests: evita usar la red. */
   fetchImpl?: typeof fetch;
 }
@@ -78,7 +82,7 @@ export async function queryClaude(request: ClaudeRequest): Promise<string> {
                 ? [
                     {
                       type: "image",
-                      source: { type: "base64", media_type: "image/jpeg", data: request.image.toString("base64") },
+                      source: { type: "base64", media_type: request.imageType ?? "image/jpeg", data: request.image.toString("base64") },
                     },
                     { type: "text", text: request.user },
                   ]
@@ -86,7 +90,7 @@ export async function queryClaude(request: ClaudeRequest): Promise<string> {
             },
           ],
           // Un modelo escrito a mano puede no admitir estas opciones.
-          ...(model ? { output_config: { effort: claudeEffort() } } : {}),
+          ...(model ? { output_config: { effort: request.effort ?? claudeEffort() } } : {}),
           ...(model?.serverFallback ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
         },
         request.timeoutMs ? { timeout: request.timeoutMs, signal: AbortSignal.timeout(request.timeoutMs) } : {},

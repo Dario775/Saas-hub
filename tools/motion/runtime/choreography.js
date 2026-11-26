@@ -18,11 +18,25 @@
  */
 (function () {
   var config = window.__MOTION;
-  var master = gsap.timeline({ paused: true });
+  /*
+   * Todo se coreografía sobre una grilla de referencia a 120 BPM (tiempo de
+   * 0,5 s). La línea interna se acelera o se frena con el tempo del estilo:
+   * a 84 BPM todo va más calmo y a 124 más rápido, siempre sobre el golpe.
+   */
+  var SPEED = (config.bpm || 120) / 120;
+  var BEAT = 0.5;
+  var STEP = BEAT / 2;
+  /** Segundos reales del video → segundos de la grilla de referencia. */
+  function ref(seconds) {
+    return seconds * SPEED;
+  }
+  var OUTRO = ref(config.outro.start);
+  var outer = gsap.timeline({ paused: true });
+  var master = gsap.timeline();
+  master.timeScale(SPEED);
+  outer.add(master, 0);
   /** Línea en la que escriben los ayudantes: la de la escena o la principal. */
   var tl = master;
-  var BEAT = 60 / (config.bpm || 120);
-  var STEP = BEAT / 2;
 
   /** Lleva un instante a la corchea más cercana. */
   function snap(time) {
@@ -244,7 +258,7 @@
     },
     foto: function () {
       var photo = one(".photo");
-      if (photo) tl.fromTo(photo, { scale: 1.14 }, { scale: 1, duration: config.duration, ease: "none" }, 0);
+      if (photo) tl.fromTo(photo, { scale: 1.14 }, { scale: 1, duration: ref(config.duration), ease: "none" }, 0);
       rise(one(".shade"), 0, { y: 0, duration: 1.2, ease: "none" });
       var t = rise(header, 0.4, { y: -24 });
       return headline(one("h1"), t, 0.08);
@@ -412,8 +426,8 @@
   // ---- Armado ----
 
   function buildHook(hook) {
-    var land = config.hook.land;
-    var travel = config.hook.scene - BEAT;
+    var land = ref(config.hook.land);
+    var travel = ref(config.hook.scene) - BEAT;
     var count = hook.copies.length;
     var inners = hook.copies.map(function (copy) { return copy.inner; });
     hook.copies.forEach(function (copy) {
@@ -453,23 +467,39 @@
     iris.style.width = iris.style.height = radius * 2 + "px";
     iris.style.background = config.accent;
     one("#scene").appendChild(iris);
-    master.fromTo(iris, { scale: 0 }, { scale: 1, duration: BEAT, ease: "power4.in" }, config.outro.start - BEAT);
+    master.fromTo(iris, { scale: 0 }, { scale: 1, duration: BEAT, ease: "power4.in" }, OUTRO - BEAT);
+    // Al entrar la placa, el círculo ya no hace falta.
+    master.set(iris, { opacity: 0 }, OUTRO + STEP);
   }
 
+  /** Placa final: el logo entra girando con un anillo que se expande, después el nombre y la web. */
   function buildOutro() {
     var outro = one(".outro");
     if (!outro) return;
-    var start = config.outro.start;
-    var logo = one(".outro img");
-    if (logo) master.from(logo, { scale: 0.7, opacity: 0, duration: 0.7, ease: "expo.out" }, start + STEP);
-    rise(all(".outro .out-name, .outro .out-cta, .outro .out-site"), start + BEAT, { y: 40, stagger: 0.12 });
+    var start = OUTRO;
+    var logo = one(".out-mark img");
+    var ring = one(".out-ring");
+    var name = one(".out-name");
+    if (logo) {
+      master.fromTo(logo, { scale: 0.35, rotation: -12, opacity: 0 }, { scale: 1, rotation: 0, opacity: 1, duration: 0.9, ease: "expo.out" }, start + STEP);
+      master.to(logo, { scale: 1.06, duration: STEP, yoyo: true, repeat: 1, ease: "power2.inOut" }, start + BEAT * 3);
+    }
+    if (ring) master.fromTo(ring, { scale: 0.45, opacity: 0.8 }, { scale: 2.3, opacity: 0, duration: 1.3, ease: "expo.out" }, start + STEP);
+    var after = logo ? start + BEAT : start + STEP;
+    if (name) {
+      var letters = splitWords(name);
+      master.from(letters, { yPercent: 110, opacity: 0, duration: 0.7, stagger: 0.06, ease: "expo.out" }, after);
+    }
+    var rule = one(".out-rule");
+    if (rule) master.from(rule, { scaleX: 0, duration: 0.6, ease: "expo.out" }, after + STEP);
+    rise(all(".outro .out-cta, .outro .out-site"), after + BEAT, { y: 40, stagger: 0.12 });
   }
 
   function build() {
     var hook = measureHook();
     var keyRect = measureKey();
     hooked = Boolean(hook);
-    var sceneStart = hook ? config.hook.scene : 0;
+    var sceneStart = hook ? ref(config.hook.scene) : 0;
     tl = gsap.timeline({ defaults: { ease: "expo.out" } });
     var scene = scenes[config.template];
     var end = scene ? scene() : headline(one("h1"), rise(header, at, { y: -24 }) - 0.3);
@@ -478,14 +508,14 @@
     tl = master;
     // Un empuje leve mantiene viva la imagen mientras se lee.
     if (page && config.template !== "foto")
-      master.fromTo(page, { scale: 1 }, { scale: 1.025, duration: config.outro.start - sceneStart, ease: "none" }, sceneStart);
+      master.fromTo(page, { scale: 1 }, { scale: 1.025, duration: OUTRO - sceneStart, ease: "none" }, sceneStart);
     if (hook) buildHook(hook);
     buildIris(keyRect);
     buildOutro();
   }
 
   window.__timelines = window.__timelines || {};
-  window.__timelines[config.id] = master;
+  window.__timelines[config.id] = outer;
   // El flyer ajusta tamaños cuando cargan las fuentes; recién ahí se mide.
   document.fonts.ready.then(build);
 })();
