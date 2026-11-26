@@ -38,7 +38,7 @@ function messageOf(error: unknown): string {
 }
 
 export default function FlyersView({ controller }: { controller: WorkspaceController }) {
-  const { pageId, currentBrand, setGeneratedImage, setMessage, setTab, setComposerInitialDesign } = controller;
+  const { pageId, currentBrand, setGeneratedImage, setGeneratedVideo, setMessage, setTab, setComposerInitialDesign } = controller;
   const brandId = pageId || currentBrand.id;
   const [brief, setBrief] = useState("");
   const [format, setFormat] = useState<FlyerFormat>("4:5");
@@ -52,7 +52,7 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
     setJobs(data.jobs || []);
   }, [brandId]);
 
-  const running = jobs.some((job) => job.status === "running");
+  const running = jobs.some((job) => job.status === "running" || job.flyers.some((flyer) => flyer.video?.status === "running"));
   useEffect(() => {
     let cancelled = false;
     const refresh = () => {
@@ -104,6 +104,16 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
     }
   }
 
+  async function handleAnimate(job: FlyerJob, flyer: Flyer, seconds: number, music: boolean) {
+    try {
+      const updated = await send({ action: "animate", jobId: job.id, flyerId: flyer.id, seconds, music });
+      if (updated) setJobs((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      toast.success("Animando el flyer", { description: "El video tarda menos de un minuto." });
+    } catch (error) {
+      toast.error("No se pudo animar el flyer", { description: messageOf(error) });
+    }
+  }
+
   async function handleEdit(job: FlyerJob, flyer: Flyer) {
     try {
       const response = await fetch("/api/flyers", {
@@ -122,7 +132,15 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
     }
   }
 
-  async function handlePublish(flyer: Flyer) {
+  async function handlePublish(flyer: Flyer, media: "image" | "video") {
+    if (media === "video" && flyer.video?.url) {
+      setGeneratedImage(null);
+      setGeneratedVideo(flyer.video.url);
+      if (flyer.concept.caption) setMessage(flyer.concept.caption);
+      setTab("publish");
+      toast.success("Video enviado a Publicaciones para que lo revises");
+      return;
+    }
     try {
       const response = await fetch(`/api/flyers/image?id=${flyer.id}`);
       if (!response.ok) throw new Error("La imagen todavía no está lista.");
@@ -133,6 +151,7 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
         reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
         reader.readAsDataURL(blob);
       });
+      setGeneratedVideo(null);
       setGeneratedImage(image);
       if (flyer.concept.caption) setMessage(flyer.concept.caption);
       setTab("publish");
@@ -236,7 +255,8 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
                 revising={revisingId === flyer.id}
                 disabled={running || revisingId !== null}
                 onRevise={(instruction) => handleRevise(job, flyer, instruction)}
-                onPublish={() => void handlePublish(flyer)}
+                onPublish={(media) => void handlePublish(flyer, media)}
+                onAnimate={(seconds, music) => handleAnimate(job, flyer, seconds, music)}
                 onEdit={() => handleEdit(job, flyer)}
                 icons={{ download: <Download size={14} />, publish: <Send size={14} /> }}
               />

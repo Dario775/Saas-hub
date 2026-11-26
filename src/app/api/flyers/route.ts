@@ -1,4 +1,5 @@
 import type { BrandConfig } from "@/features/workspace/config";
+import { animateFlyer, readVideoSeconds } from "@/lib/flyers/motion";
 import { exportFlyer, reviseFlyer, startFlyerJob, visibleJobs } from "@/lib/flyers/pipeline";
 import { FLYER_SIZES, type FlyerBrand, type FlyerFormat } from "@/lib/flyers/types";
 import { readJson } from "@/lib/json-store";
@@ -66,6 +67,16 @@ export async function POST(request: NextRequest) {
     if (body.action === "export") {
       const design = await exportFlyer(String(body.jobId || ""), String(body.flyerId || ""), brand);
       return NextResponse.json({ success: true, design });
+    }
+    if (body.action === "animate") {
+      const { job } = await animateFlyer({
+        jobId: String(body.jobId || ""),
+        flyerId: String(body.flyerId || ""),
+        brand,
+        seconds: readVideoSeconds(body.seconds),
+        music: body.music !== false,
+      });
+      return NextResponse.json({ success: true, job }, { status: 202 });
     }
     const model = readModel(body.model);
     if (body.action === "revise") {

@@ -9,8 +9,10 @@ import type { FlyerRenderMode } from "./export-script";
 import { parseMeasurements, type FlyerExport } from "./flyer-layers";
 import { dumpRenderedDom, renderHtml } from "./render";
 import { flyerFile, mutateJobs, readFlyerFile, readJobs, saveFlyerFile, updateJob } from "./store";
+import { flyerContext } from "./context";
+import { removePublicVideo, settleVideos } from "./motion";
 import { buildFlyerHtml, findTemplate } from "./templates";
-import { buildTheme, displayFont } from "./theme";
+import { displayFont } from "./theme";
 import { FLYER_SIZES, type Flyer, type FlyerBrand, type FlyerConcept, type FlyerFormat, type FlyerJob, type FlyerReview } from "./types";
 
 const MAX_REVIEW_ROUNDS = 2;
@@ -67,25 +69,8 @@ function flyerHtml(
 ): string {
   const template = findTemplate(concept.template);
   if (!template) throw new Error("El diseño ya no está disponible.");
-  const theme = buildTheme(brand, concept.tone);
-  const { width, height } = FLYER_SIZES[format];
-  return buildFlyerHtml(
-    template,
-    {
-      slots: concept.slots,
-      theme,
-      width,
-      height,
-      brandName: brand.name,
-      website: brand.website.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, ""),
-      logoUrl: logo ? (theme.dark ? logo.light : logo.dark) : null,
-      logoLightUrl: logo?.light || null,
-      logoDarkUrl: logo?.dark || null,
-      assetUrl: flyer.hasAsset ? pathToFileURL(flyerFile(flyer.id, "recurso")).href : null,
-    },
-    displayFont(brand.headingFont),
-    mode,
-  );
+  const assetUrl = flyer.hasAsset ? pathToFileURL(flyerFile(flyer.id, "recurso")).href : null;
+  return buildFlyerHtml(template, flyerContext(concept, format, brand, logo, assetUrl), displayFont(brand.headingFont), mode);
 }
 
 async function drawFlyer(
@@ -195,8 +180,10 @@ function setFlyer(job: FlyerJob, id: string, change: Partial<Flyer>): FlyerJob {
 
 async function finishFlyer(jobId: string, flyer: Flyer, produced: Produced): Promise<void> {
   saveFlyerFile(flyer.id, "imagen", await fitForPublishing(produced.image));
+  // El video mostraba el diseño anterior.
+  removePublicVideo(flyer.video?.url);
   await updateJob(jobId, (job) =>
-    setFlyer(job, flyer.id, { concept: produced.concept, review: produced.review, revision: flyer.revision + 1, error: undefined }),
+    setFlyer(job, flyer.id, { concept: produced.concept, review: produced.review, revision: flyer.revision + 1, error: undefined, video: undefined }),
   );
 }
 
@@ -288,6 +275,7 @@ export async function reviseFlyer(jobId: string, flyerId: string, instruction: s
 export function visibleJobs(brandId?: string): FlyerJob[] {
   return readJobs()
     .filter((job) => !brandId || job.brandId === brandId)
+    .map(settleVideos)
     .map((job) =>
       job.status === "running" && !worker.saasFlyerBusy
         ? { ...job, status: job.flyers.some((flyer) => flyer.revision > 0) ? ("done" as const) : ("failed" as const), step: "", error: job.error || "Se interrumpió la preparación." }

@@ -57,6 +57,21 @@ export interface FlyerReview {
   problems: string[];
 }
 
+export type FlyerVideoStatus = "running" | "done" | "failed";
+
+/** Versión animada del flyer. */
+export interface FlyerVideo {
+  status: FlyerVideoStatus;
+  seconds: number;
+  /** Con sonido: ritmo y efectos generados, más la música propia si hay. */
+  music: boolean;
+  /** Si usó una pista de la carpeta de música. */
+  track?: boolean;
+  /** Ruta pública del MP4, lista para mostrar y publicar. */
+  url?: string;
+  error?: string;
+}
+
 export interface Flyer {
   id: string;
   concept: FlyerConcept;
@@ -66,6 +81,7 @@ export interface Flyer {
   /** Cambia con cada render, para no mostrar una imagen vieja. */
   revision: number;
   error?: string;
+  video?: FlyerVideo;
 }
 
 export type FlyerJobStatus = "running" | "done" | "failed";

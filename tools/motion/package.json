@@ -1,0 +1,12 @@
+{
+  "name": "hub-motion-renderer",
+  "private": true,
+  "description": "Renderizador de video del panel (HyperFrames), aislado de las dependencias de la app.",
+  "dependencies": {
+    "hyperframes": "0.9.94"
+  },
+  "overrides": {
+    "puppeteer-core": "25.18.1",
+    "@puppeteer/browsers": "3.2.7"
+  }
+}

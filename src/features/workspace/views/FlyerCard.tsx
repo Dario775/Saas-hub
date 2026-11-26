@@ -3,6 +3,7 @@
 import type { Flyer, FlyerFormat } from "@/lib/flyers/types";
 import { Layers3, Loader2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { FlyerVideoControls } from "./FlyerVideoControls";
 
 interface FlyerCardProps {
   flyer: Flyer;
@@ -10,7 +11,9 @@ interface FlyerCardProps {
   revising: boolean;
   disabled: boolean;
   onRevise: (instruction: string) => Promise<boolean>;
-  onPublish: () => void;
+  onPublish: (media: "image" | "video") => void;
+  /** Arma la versión animada del flyer. */
+  onAnimate: (seconds: number, music: boolean) => Promise<void>;
   /** Abre el flyer en el editor de diseño, con los textos como capas. */
   onEdit: () => Promise<void>;
   icons: { download: ReactNode; publish: ReactNode };
@@ -18,11 +21,15 @@ interface FlyerCardProps {
 
 const RATIO: Record<FlyerFormat, string> = { "4:5": "4 / 5", "1:1": "1 / 1", "9:16": "9 / 16" };
 
-export function FlyerCard({ flyer, pending, revising, disabled, onRevise, onPublish, onEdit, icons }: FlyerCardProps) {
+export function FlyerCard({ flyer, pending, revising, disabled, onRevise, onPublish, onAnimate, onEdit, icons }: FlyerCardProps) {
   const [instruction, setInstruction] = useState("");
   const [opening, setOpening] = useState(false);
   const ready = flyer.revision > 0;
   const source = `/api/flyers/image?id=${flyer.id}&v=${flyer.revision}`;
+  const videoUrl = flyer.video?.status === "done" ? flyer.video.url : undefined;
+  const [view, setView] = useState<"image" | "video">("image");
+  const showVideo = view === "video" && Boolean(videoUrl);
+  const media = showVideo ? "video" : "image";
 
   async function submit() {
     if (instruction.trim() && (await onRevise(instruction.trim()))) setInstruction("");
@@ -31,7 +38,24 @@ export function FlyerCard({ flyer, pending, revising, disabled, onRevise, onPubl
   return (
     <article className="hub-panel overflow-hidden flex flex-col">
       <div className="relative bg-black/40" style={{ aspectRatio: RATIO[flyer.format] }}>
-        {ready ? (
+        {videoUrl && (
+          <div className="absolute left-2 top-2 z-10 flex rounded-full bg-black/70 p-0.5 text-[11px]" role="group" aria-label="Ver imagen o video">
+            {(["image", "video"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={view === option}
+                onClick={() => setView(option)}
+                className={`rounded-full px-2.5 py-1 ${view === option ? "bg-white text-black" : "text-slate-200"}`}
+              >
+                {option === "image" ? "Imagen" : "Video"}
+              </button>
+            ))}
+          </div>
+        )}
+        {showVideo ? (
+          <video key={videoUrl} src={videoUrl} controls autoPlay muted loop playsInline className="h-full w-full object-cover" />
+        ) : ready ? (
           <a href={source} target="_blank" rel="noreferrer" aria-label="Ver el flyer en tamaño completo">
             {/* Imagen local ya optimizada: next/image no aporta acá. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -95,12 +119,17 @@ export function FlyerCard({ flyer, pending, revising, disabled, onRevise, onPubl
               {opening ? <Loader2 size={14} className="animate-spin" /> : <Layers3 size={14} />}
               {opening ? "Separando capas…" : "Editar en el editor de diseño"}
             </button>
+            <FlyerVideoControls video={flyer.video} disabled={revising} onAnimate={onAnimate} />
             <div className="flex gap-2">
-              <a href={source} download={`flyer-${flyer.concept.template}.png`} className="hub-button hub-button-secondary flex-1 !py-2">
+              <a
+                href={showVideo ? videoUrl : source}
+                download={`flyer-${flyer.concept.template}.${showVideo ? "mp4" : "png"}`}
+                className="hub-button hub-button-secondary flex-1 !py-2"
+              >
                 {icons.download} Descargar
               </a>
-              <button type="button" onClick={onPublish} className="hub-button hub-button-primary flex-1 !py-2">
-                {icons.publish} Publicar
+              <button type="button" onClick={() => onPublish(media)} className="hub-button hub-button-primary flex-1 !py-2">
+                {icons.publish} {showVideo ? "Publicar video" : "Publicar"}
               </button>
             </div>
           </>
