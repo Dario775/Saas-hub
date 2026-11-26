@@ -99,13 +99,17 @@ export async function renderLayersToCanvas(
   canvas: HTMLCanvasElement,
   layers: CanvasLayer[],
   dimensions: CanvasDimensions,
-  brandLogosMap?: Record<string, string>
+  brandLogosMap?: Record<string, string>,
+  scale = 1
 ): Promise<void> {
-  canvas.width = dimensions.width;
-  canvas.height = dimensions.height;
+  canvas.width = Math.round(dimensions.width * scale);
+  canvas.height = Math.round(dimensions.height * scale);
 
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
+  ctx.scale(scale, scale);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
   // Limpiar canvas
   ctx.clearRect(0, 0, dimensions.width, dimensions.height);
@@ -113,6 +117,18 @@ export async function renderLayersToCanvas(
   // Asegurar que las fuentes estén listas en el navegador
   if (typeof document !== "undefined" && document.fonts) {
     try {
+      // El canvas no pide fuentes: sin esto, una que no esté en pantalla se
+      // reemplaza por la del sistema.
+      await Promise.all(
+        layers
+          .filter((layer): layer is TextLayer => layer.visible && layer.type === "text")
+          .map((layer) =>
+            document.fonts.load(
+              `${layer.fontStyle || "normal"} ${layer.fontWeight || 700} 48px "${layer.fontFamily}"`,
+              layer.text,
+            ),
+          ),
+      );
       await document.fonts.ready;
     } catch {
       // Continuar si falla
@@ -170,6 +186,12 @@ export async function renderLayersToCanvas(
   }
 }
 
+/** Píxeles reales por unidad del lienzo (sombras y desenfoques no siguen la escala). */
+function pixelScale(ctx: CanvasRenderingContext2D): number {
+  const { a, b } = ctx.getTransform();
+  return Math.hypot(a, b) || 1;
+}
+
 function getSvgDataUrl(svgString: string): string {
   if (!svgString) return "";
   if (svgString.startsWith("data:") || svgString.startsWith("http") || svgString.startsWith("/")) return svgString;
@@ -223,9 +245,9 @@ async function drawImageLayer(ctx: CanvasRenderingContext2D, layer: ImageLayer) 
     // Sombra si está configurada
     if (layer.shadowBlur && layer.shadowBlur > 0) {
       ctx.shadowColor = layer.shadowColor || "rgba(0,0,0,0.5)";
-      ctx.shadowBlur = layer.shadowBlur;
-      ctx.shadowOffsetX = layer.shadowOffsetX || 0;
-      ctx.shadowOffsetY = layer.shadowOffsetY || 4;
+      ctx.shadowBlur = (layer.shadowBlur) * pixelScale(ctx);
+      ctx.shadowOffsetX = (layer.shadowOffsetX || 0) * pixelScale(ctx);
+      ctx.shadowOffsetY = (layer.shadowOffsetY || 4) * pixelScale(ctx);
     }
 
     // Bordes redondeados con clipping
@@ -273,7 +295,7 @@ function drawShapeLayer(ctx: CanvasRenderingContext2D, layer: ShapeLayer) {
 
   if (layer.shadowBlur && layer.shadowBlur > 0) {
     ctx.shadowColor = layer.shadowColor || "rgba(0,0,0,0.4)";
-    ctx.shadowBlur = layer.shadowBlur;
+    ctx.shadowBlur = (layer.shadowBlur) * pixelScale(ctx);
   }
 
   // Configurar relleno
@@ -386,14 +408,14 @@ function drawTextLayer(ctx: CanvasRenderingContext2D, layer: TextLayer) {
   // Configurar Sombras o Glow
   if (layer.glow && layer.glowColor) {
     ctx.shadowColor = layer.glowColor;
-    ctx.shadowBlur = layer.shadowBlur || 25;
+    ctx.shadowBlur = (layer.shadowBlur || 25) * pixelScale(ctx);
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
   } else if (layer.shadowBlur && layer.shadowBlur > 0) {
     ctx.shadowColor = layer.shadowColor || "rgba(0,0,0,0.75)";
-    ctx.shadowBlur = layer.shadowBlur;
-    ctx.shadowOffsetX = layer.shadowOffsetX || 0;
-    ctx.shadowOffsetY = layer.shadowOffsetY || 4;
+    ctx.shadowBlur = (layer.shadowBlur) * pixelScale(ctx);
+    ctx.shadowOffsetX = (layer.shadowOffsetX || 0) * pixelScale(ctx);
+    ctx.shadowOffsetY = (layer.shadowOffsetY || 4) * pixelScale(ctx);
   }
 
   // Relleno: Gradiente o Color sólido

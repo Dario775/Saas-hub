@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import React from "react";
 import { toast } from "sonner";
-import { removeSolidBackground } from "./canvas-renderer";
+import { removeBackground } from "./ai-background-removal";
 import {
 BackgroundLayer,
 BrandLogoLayer,
@@ -808,16 +808,25 @@ function renderImageProperties(
                 variant="outline"
                 type="button"
                 onClick={async () => {
+                  const loadingId = toast.loading("Quitando el fondo con IA…");
                   try {
-                    const cut = await removeSolidBackground(layer.imageUrl, 45);
-                    onUpdateLayer(layer.id, { imageUrl: cut });
-                    toast.success("Fondo eliminado a transparente");
-                  } catch (err: any) {
-                    toast.error("Error al remover fondo", { description: err.message });
+                    const cut = await removeBackground(layer.imageUrl);
+                    onUpdateLayer(layer.id, { imageUrl: cut.image });
+                    toast.success(
+                      cut.method === "ia"
+                        ? "Fondo eliminado con IA"
+                        : "Fondo eliminado por color (encendé ComfyUI para un mejor recorte)",
+                      { id: loadingId },
+                    );
+                  } catch (err) {
+                    toast.error("Error al remover fondo", {
+                      id: loadingId,
+                      description: err instanceof Error ? err.message : undefined,
+                    });
                   }
                 }}
                 className="h-8 text-[11px] bg-emerald-950/40 border-emerald-800/60 hover:bg-emerald-900/60 text-emerald-300 gap-1"
-                title="Quitar fondo sólido a transparente"
+                title="Quitar el fondo con IA (Qwen local)"
               >
                 <Scissors className="w-3.5 h-3.5 text-emerald-400" />
                 Quitar Fondo

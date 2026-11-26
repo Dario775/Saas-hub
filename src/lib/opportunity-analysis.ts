@@ -242,7 +242,10 @@ export async function analyzeWithDeepSeek(
   input: AnalysisInput,
   options: { settings?: LLMSettings } = {},
 ): Promise<OpportunityAnalysis> {
-  const settings: LLMSettings = options.settings || { provider: "deepseek" };
+  // DeepSeek por defecto; si Claude es el proveedor activo, analiza con Claude.
+  const settings: LLMSettings = options.settings || {
+    provider: process.env.LLM_PROVIDER === "claude" ? "claude" : "deepseek",
+  };
   const { model } = resolveLLMConfig(settings);
   const provider = settings.provider || "deepseek";
   const coverage = evidenceCoverage(input.evidence, ANALYZED_FIELDS);

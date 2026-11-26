@@ -1,5 +1,7 @@
+import { prepareVram } from "@/lib/comfy-vram";
 import { fetchWithRetry } from "@/lib/fetch-helper";
-import { GENERATORS,IDEOGRAM_4_WORKFLOW,buildRichPrompt,type ImageGenerator } from "@/lib/generators";
+import { GENERATORS,IDEOGRAM_4_WORKFLOW,IMAGE_STYLES,buildRichPrompt,type ImageGenerator } from "@/lib/generators";
+import { ideogramPrompt } from "@/lib/ideogram-prompt";
 import { queryLLM } from "@/lib/llm";
 import { NextRequest,NextResponse } from "next/server";
 
@@ -262,8 +264,16 @@ export async function POST(request: NextRequest) {
         finalPrompt = llmResponse.trim();
         console.log("Prompt estructurado JSON obtenido del LLM.");
       } catch (err: any) {
-        console.warn("Fallo al llamar al LLM para expansión de prompt, cayendo a texto plano: ", err.message);
-        finalPrompt = rawPrompt;
+        console.warn("Fallo al llamar al LLM para expansión de prompt, usando el prompt estructurado local: ", err.message);
+        finalPrompt = ideogramPrompt({
+          subject: imageSubject || prompt,
+          text: imageText,
+          subtitle: imageSubtitle,
+          style: IMAGE_STYLES.find((style) => style.value === imageStyle)?.prompt,
+          details: imageDetails,
+          width: Number(w),
+          height: Number(h),
+        });
       }
       
       params.rawUserPrompt = rawPrompt;
@@ -334,6 +344,9 @@ export async function POST(request: NextRequest) {
       clearTimeout(queueTimeoutId);
     }
 
+    // Toda la VRAM para esta imagen: descarga modelos de otros flujos.
+    await prepareVram(generatorId);
+
     // Enviar a ComfyUI
     const promptController = new AbortController();
     const promptTimeoutId = setTimeout(() => promptController.abort(), COMFYUI_TIMEOUT);
@@ -367,9 +380,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No se obtuvo prompt_id", detail: queueData }, { status: 502 });
     }
 
-    // Poll hasta que termine (5 minutos máximo)
+    // Poll hasta que termine (10 minutos: los modos de máxima calidad superan los 5)
     const startTime = Date.now();
-    const maxWait = 300000; // 5 min
+    const maxWait = 600000;
 
     while (Date.now() - startTime < maxWait) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -399,6 +412,7 @@ export async function POST(request: NextRequest) {
           "realvis-xl": "9",
           "z-image-turbo": "10",
           "ideogram-4": "158",
+          "qwen-image-2.1": "9",
         };
 
         const saveNodeId = saveNodeForGenerator[generatorId] || "9";
@@ -451,7 +465,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ error: `Timeout (5min) esperando a ${gen.name}` }, { status: 504 });
+    return NextResponse.json({ error: `Timeout (10min) esperando a ${gen.name}` }, { status: 504 });
   } catch (err) {
     return NextResponse.json(
       { error: "Error al conectar con ComfyUI", detail: String(err) },

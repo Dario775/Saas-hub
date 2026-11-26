@@ -1,18 +1,12 @@
 import { comfyGenerate, comfyHealth } from "@/lib/comfy-client";
 import { adaptPromptForModel, CONCEPT_STRATEGIES, generateConcepts, ROUTER, ROUTER_REASON } from "@/lib/concept-studio";
 import { buildRichPrompt, GENERATORS, IDEOGRAM_4_WORKFLOW, type ImageGenerator } from "@/lib/generators";
+import { ideogramPrompt } from "@/lib/ideogram-prompt";
 import { queryLLM } from "@/lib/llm";
+import { renderSizeForAspect } from "@/lib/render-sizes";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-
-// Presets de tamaño por plataforma (16px-multiples para ComfyUI)
-const SIZE_PRESETS: Record<string, { width: number; height: number }> = {
-  "1:1": { width: 1024, height: 1024 },
-  "9:16": { width: 768, height: 1360 },
-  "4:5": { width: 1024, height: 1280 },
-  "16:9": { width: 1344, height: 768 },
-};
 
 export async function POST(request: NextRequest) {
   try {
@@ -59,7 +53,7 @@ export async function POST(request: NextRequest) {
     const hasOpenaiKey = Boolean(process.env.OPENAI_API_KEY || body.openaiApiKey);
     const baseSize = width && height
       ? { width: Number(width), height: Number(height) }
-      : (SIZE_PRESETS[aspectRatio] || SIZE_PRESETS["1:1"]);
+      : renderSizeForAspect(aspectRatio);
 
     // Modo rápido por defecto (entrega instantánea en 3-5s sin riesgo de timeouts)
     if (!renderAll || !isComfyOnline) {
@@ -68,6 +62,8 @@ export async function POST(request: NextRequest) {
         const gen = GENERATORS[generatorId];
         return {
           ...concept,
+          renderPrompt: adaptPromptForModel(concept, generatorId),
+          aspectRatio,
           generator: generatorId,
           generatorName: gen.name,
           generatorReason: ROUTER_REASON[concept.modelHint],
@@ -147,8 +143,13 @@ export async function POST(request: NextRequest) {
           params.rawUserPrompt = rawPrompt;
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          console.warn("[CreativeStudio] Falló la estructuración de Ideogram, usando prompt plano:", errMsg);
-          finalPrompt = adaptPromptForModel(concept, generatorId);
+          console.warn("[CreativeStudio] Falló la estructuración de Ideogram, usando el prompt estructurado local:", errMsg);
+          finalPrompt = ideogramPrompt({
+            subject: concept.visualPrompt,
+            text: concept.headline,
+            subtitle: concept.subtitle,
+            ...baseSize,
+          });
         }
       }
 

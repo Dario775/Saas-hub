@@ -13,6 +13,7 @@ Plus,
 Send,
 Sparkles,
 Users,
+Wand2,
 X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -27,6 +28,7 @@ const loading = () => (
   </div>
 );
 const BrandKitView = dynamic(() => import("./views/BrandKitView"), { loading });
+const FlyersView = dynamic(() => import("./views/FlyersView"), { loading });
 const CreativeView = dynamic(() => import("./views/CreativeView"), { loading });
 const ImageView = dynamic(() => import("./views/ImageView"), { loading });
 const ComposerView = dynamic(() => import("./views/ComposerView"), { loading });
@@ -45,6 +47,12 @@ const navigation = [
     title: "Resumen",
     icon: LayoutDashboard,
     description: "Tu operación, en un solo lugar.",
+  },
+  {
+    id: "flyers",
+    title: "Flyers",
+    icon: Wand2,
+    description: "Contá qué querés comunicar y elegí entre cuatro propuestas terminadas.",
   },
   {
     id: "creative",
@@ -280,6 +288,9 @@ export default function Workspace() {
                   </div>
                   <BrandKitView controller={controller} />
                 </>
+              )}
+              {tab === "flyers" && (
+                <FlyersView key={controller.pageId} controller={controller} />
               )}
               {tab === "creative" && <CreativeView controller={controller} />}
               {tab === "image" && <ImageView controller={controller} />}

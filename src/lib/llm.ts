@@ -1,3 +1,4 @@
+import { CLAUDE_DEFAULT_MODEL } from "./claude-models";
 import { fetchWithRetry } from "./fetch-helper";
 
 export type LLMProvider =
@@ -5,7 +6,8 @@ export type LLMProvider =
   | "ollama"
   | "gemini"
   | "openai"
-  | "deepseek";
+  | "deepseek"
+  | "claude";
 
 export interface LLMSettings {
   provider?: LLMProvider;
@@ -19,6 +21,8 @@ export interface LLMSettings {
   openaiModel?: string;
   deepseekApiKey?: string;
   deepseekModel?: string;
+  claudeApiKey?: string;
+  claudeModel?: string;
 }
 
 /**
@@ -48,6 +52,11 @@ export const LLM_DEFAULTS: Record<
     model: "deepseek-flash",
     url: "https://api.deepseek.com/chat/completions",
     label: "DeepSeek",
+  },
+  claude: {
+    model: CLAUDE_DEFAULT_MODEL,
+    url: "https://api.anthropic.com/v1/messages",
+    label: "Claude",
   },
   ollama: {
     model: "llama3",
@@ -98,6 +107,14 @@ export function resolveLLMConfig(settings?: LLMSettings): {
         process.env.DEEPSEEK_MODEL ||
         LLM_DEFAULTS.deepseek.model,
     };
+  if (provider === "claude")
+    return {
+      provider,
+      model:
+        settings?.claudeModel ||
+        process.env.CLAUDE_API_MODEL ||
+        LLM_DEFAULTS.claude.model,
+    };
   return {
     provider,
     model:
@@ -105,6 +122,13 @@ export function resolveLLMConfig(settings?: LLMSettings): {
       process.env.LOCAL_LLM_MODEL ||
       LLM_DEFAULTS.ollama.model,
   };
+}
+
+/** Quita los bloques de código que algunos modelos agregan alrededor del JSON. */
+function stripCodeFence(text: string): string {
+  const clean = text.trim();
+  if (!clean.startsWith("```")) return clean;
+  return clean.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
 }
 
 export async function queryLLM(
@@ -120,6 +144,20 @@ export async function queryLLM(
     (process.env.LLM_PROVIDER as LLMProvider) ||
     "openrouter";
   
+  if (provider === "claude") {
+    // Claude va por su SDK oficial; se carga solo cuando se usa.
+    const { queryClaude } = await import("./claude");
+    const answer = await queryClaude({
+      model: resolveLLMConfig(settings).model,
+      system: systemPrompt,
+      user: userPrompt,
+      apiKey: settings?.claudeApiKey,
+      expectJson,
+      timeoutMs: options.timeoutMs,
+    });
+    return expectJson ? stripCodeFence(answer) : answer;
+  }
+
   let url = "";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -320,15 +358,5 @@ export async function queryLLM(
   }
   
   // Limpiar posibles bloques de código markdown que algunos LLMs insertan aun pidiendo json_object
-  if (expectJson) {
-    text = text.trim();
-    if (text.startsWith("```")) {
-      // Remover bloques del tipo ```json ... ```
-      text = text.replace(/^```[a-zA-Z]*\n?/, "");
-      text = text.replace(/\n?```$/, "");
-      text = text.trim();
-    }
-  }
-
-  return text;
+  return expectJson ? stripCodeFence(text) : text;
 }

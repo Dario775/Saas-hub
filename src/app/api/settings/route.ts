@@ -11,6 +11,8 @@ const fields: Record<string, string> = {
   openaiApiKey: "OPENAI_API_KEY",
   deepseekKey: "DEEPSEEK_API_KEY",
   deepseekModel: "DEEPSEEK_MODEL",
+  claudeKey: "ANTHROPIC_API_KEY",
+  claudeModel: "CLAUDE_API_MODEL",
   jevKey: "JEV_API_KEY",
 };
 const secrets = new Set([
@@ -18,6 +20,7 @@ const secrets = new Set([
   "geminiApiKey",
   "openaiApiKey",
   "deepseekKey",
+  "claudeKey",
   "jevKey",
 ]);
 export async function GET() {
@@ -33,7 +36,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     if (
       body.provider &&
-      !["openrouter", "ollama", "gemini", "openai", "deepseek"].includes(
+      !["openrouter", "ollama", "gemini", "openai", "deepseek", "claude"].includes(
         body.provider,
       )
     )

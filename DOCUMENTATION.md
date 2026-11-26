@@ -30,6 +30,10 @@ La copia previa de la refactorización está en `.refactor-backup/2026-09-10`. C
 
 `json-store.ts` escribe mediante reemplazo atómico y proporciona bloqueos entre procesos. Un JSON corrupto produce un error; no se reemplaza silenciosamente por una lista vacía. La agenda usa el bloqueo para cada cambio de estado. La búsqueda comercial vuelve a leer los prospectos al terminar solicitudes externas para conservar cambios realizados durante la espera.
 
+## Flyers
+
+`src/lib/flyers` crea cuatro propuestas por pedido. Claude dirige y elige entre diez sistemas de diseño (`templates*.ts`); ComfyUI genera la foto u objeto solo si el sistema lo pide; Chrome o Edge en modo oculto convierte el HTML en PNG de 2160 px (`CHROME_PATH` permite indicar otro navegador); Claude revisa la imagen y corrige hasta dos veces. Los textos se validan y se escapan antes de dibujar. Corre un trabajo por vez. Los datos quedan en `flyers-data/`, fuera de Git. "Editar en el editor de diseño" vuelve a dibujar el flyer en dos modos (`export-script.ts`): uno mide cada texto (posición, fuente, color, cortes de línea y opacidad) y otro genera el fondo sin esos textos; el editor los recibe como capas. Lo marcado con `data-static` en un diseño queda en el fondo.
+
 ## Publicaciones
 
 Los endpoints comparten validación y `social-dispatcher.ts`. El motor nativo admite publicación directa y programada en Facebook, Instagram (Business/Reels), LinkedIn y X (Twitter). n8n ha sido completamente desvinculado del sistema.

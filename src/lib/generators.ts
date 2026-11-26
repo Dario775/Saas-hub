@@ -1,6 +1,6 @@
 // Configuración de generadores de imagen disponibles en ComfyUI
 
-export type ImageGenerator = "flux-dev" | "flux-schnell" | "ideogram-4" | "flux-2-klein" | "realvis-xl" | "z-image-turbo" | "gemini-3.1-flash-lite-image" | "gemini-3.1-flash-image" | "gemini-3-pro-image" | "gemini-2.5-flash-image" | "dall-e-3" | "dall-e-2";
+export type ImageGenerator = "flux-dev" | "flux-schnell" | "ideogram-4" | "qwen-image-2.1" | "flux-2-klein" | "realvis-xl" | "z-image-turbo" | "gemini-3.1-flash-lite-image" | "gemini-3.1-flash-image" | "gemini-3-pro-image" | "gemini-2.5-flash-image" | "dall-e-3" | "dall-e-2";
 
 export interface GeneratorParam {
   id: string;
@@ -30,11 +30,6 @@ function seed() {
 // Alinear resolución a múltiplo de 16px (requerido por ComfyUI)
 function alignRes(v: number): number {
   return Math.max(Math.round(v / 16) * 16, 256);
-}
-
-// Calcula MCD para aspect ratio
-function gcd(a: number, b: number): number {
-  return b === 0 ? a : gcd(b, a % b);
 }
 
 export const IDEOGRAM_4_WORKFLOW: Record<string, any> = {
@@ -585,7 +580,8 @@ function applyUpscale(
   saveNodeId: string,
   upscale?: string
 ): Record<string, any> {
-  const modelName = upscale ? UPSCALERS[upscale] : undefined;
+  // "refinado" es propio de Z-Image; en el resto equivale al mejor upscale.
+  const modelName = upscale ? UPSCALERS[upscale === "refinado" ? "ultrasharp" : upscale] : undefined;
   if (!modelName) return wf;
 
   const saveNode = wf[saveNodeId];
@@ -598,9 +594,46 @@ function applyUpscale(
     class_type: "ImageUpscaleWithModel",
     inputs: { upscale_model: ["30", 0], image: sourceImage },
   };
-  saveNode.inputs.images = ["31", 0];
+  // El modelo amplía 4x; se reduce a 2x (~2K). Un 4096 px no mejora lo que
+  // muestran las redes y supera el límite de 10 MB para publicar.
+  wf["32"] = {
+    class_type: "ImageScaleBy",
+    inputs: { image: ["31", 0], upscale_method: "lanczos", scale_by: 0.5 },
+  };
+  saveNode.inputs.images = ["32", 0];
 
   return wf;
+}
+
+/** Segunda pasada de Z-Image: agranda a 2x y rehace el detalle (plantilla oficial). */
+function applyZImageRefine(wf: Record<string, any>): Record<string, any> {
+  return {
+    ...wf,
+    "20": { class_type: "UpscaleModelLoader", inputs: { model_name: UPSCALERS.realesrgan } },
+    "21": { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["20", 0], image: ["9", 0] } },
+    "22": { class_type: "ImageScaleBy", inputs: { image: ["21", 0], upscale_method: "lanczos", scale_by: 0.5 } },
+    "23": { class_type: "VAEEncode", inputs: { pixels: ["22", 0], vae: ["3", 0] } },
+    "24": { class_type: "KSampler", inputs: { seed: seed(), steps: 5, cfg: 1, sampler_name: "dpmpp_2m_sde", scheduler: "beta", denoise: 0.28, model: ["6", 0], positive: ["4", 0], negative: ["5", 0], latent_image: ["23", 0] } },
+    "25": { class_type: "VAEDecode", inputs: { samples: ["24", 0], vae: ["3", 0] } },
+    "10": { class_type: "SaveImage", inputs: { images: ["25", 0], filename_prefix: "saas_hub" } },
+  };
+}
+
+/** Envuelve el prompt para que Qwen Image 2.1 genere un PNG con transparencia real. */
+export function transparentPrompt(prompt: string): string {
+  return `This is an RGBA format image with transparency. ${prompt.trim().replace(/[.,\s]+$/, "")}. The image has an alpha channel and a transparent background.`;
+}
+
+const TEXT_CAPABLE: ReadonlySet<string> = new Set([
+  "qwen-image-2.1",
+  "gemini-3-pro-image",
+  "gemini-3.1-flash-image",
+  "dall-e-3",
+]);
+
+/** ¿El generador escribe texto en español de forma razonablemente confiable? */
+export function writesReliableText(generatorId: string): boolean {
+  return TEXT_CAPABLE.has(generatorId);
 }
 
 export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
@@ -624,7 +657,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         { value: "exponential", label: "Exponential" }, { value: "sgm_uniform", label: "SGM Uniform" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
     buildWorkflow(prompt, p, negative = "") {
@@ -661,7 +694,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         { value: "exponential", label: "Exponential" }, { value: "sgm_uniform", label: "SGM Uniform" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
     buildWorkflow(prompt, p, negative = "") {
@@ -693,7 +726,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         { value: "Turbo", label: "Turbo (12 pasos, ~50s)" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
     buildWorkflow(prompt, p, _negative = "") {
@@ -721,59 +754,102 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         wf["98:156"].inputs.choice = String(p.preset || "Default");
       }
       
-      // Actualizar aspect ratio en ResolutionSelector (nodo 37)
-      const w = Number(p.width) || 1024;
-      const h = Number(p.height) || 1024;
-      let aspectRatioStr = "1:1 (Square)";
-      if (w > h) {
-        aspectRatioStr = "16:9 (Landscape Widescreen)";
-      } else if (w < h) {
-        aspectRatioStr = "9:16 (Portrait Widescreen)";
+      // Tamaño exacto del lienzo. El selector de la plantilla solo ofrece
+      // proporciones fijas y convertía cualquier vertical a 9:16.
+      const size = [alignRes(Number(p.width) || 1024), alignRes(Number(p.height) || 1024)];
+      for (const node of Object.values<any>(wf)) {
+        for (const [key, value] of Object.entries<any>(node.inputs || {})) {
+          if (Array.isArray(value) && value[0] === "37") node.inputs[key] = size[value[1]];
+        }
       }
-      
-      if (wf["37"]) {
-        wf["37"].inputs.aspect_ratio = aspectRatioStr;
-      }
-      
+      delete wf["37"];
+
       return applyUpscale(wf, "158", String(p.upscale));
+    },
+  },
+
+  "qwen-image-2.1": {
+    id: "qwen-image-2.1",
+    name: "Qwen Image 2.1",
+    description: "Qwen Image 2.1 INT8 - gran calidad visual, composición y texto integrado",
+    emoji: "Q",
+    defaultParams: { width: 1024, height: 1024, steps: 40, cfg: 1.0, sampler: "euler", scheduler: "simple", upscale: "ninguno", transparent: 0 },
+    params: [
+      { id: "width", label: "Ancho", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
+      { id: "height", label: "Alto", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
+      { id: "steps", label: "Pasos", type: "number", default: 40, min: 20, max: 60, step: 1 },
+      { id: "cfg", label: "CFG", type: "number", default: 1.0, min: 1.0, max: 5.0, step: 0.5 },
+      { id: "sampler", label: "Sampler", type: "select", default: "euler", options: [
+        { value: "euler", label: "Euler" },
+        { value: "res_multistep", label: "Res Multistep" },
+        { value: "dpmpp_2m", label: "DPM++ 2M" },
+      ]},
+      { id: "scheduler", label: "Scheduler", type: "select", default: "simple", options: [
+        { value: "simple", label: "Simple" },
+        { value: "normal", label: "Normal" },
+        { value: "karras", label: "Karras" },
+      ]},
+      { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
+      ]},
+    ],
+    buildWorkflow(prompt, p, negative = "") {
+      const width = alignRes(Number(p.width) || 1024);
+      const height = alignRes(Number(p.height) || 1024);
+      const transparent = Number(p.transparent) === 1;
+      const workflow = {
+        "1": { class_type: "UNETLoader", inputs: { unet_name: "qwen_image_2.1_int8_convrot.safetensors", weight_dtype: "default" } },
+        "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_8b_int8_convrot.safetensors", type: "qwen_image", device: "default" } },
+        "3": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_2.1_vae_bf16.safetensors" } },
+        "4": { class_type: "TextEncodeQwenImage21", inputs: { prompt: transparent ? transparentPrompt(prompt) : prompt, negative_prompt: negative, resolution: 1024, clip: ["2", 0] } },
+        "5": { class_type: "EmptyLatentImage", inputs: { width, height, batch_size: 1 } },
+        "6": { class_type: "KSampler", inputs: { seed: seed(), steps: Number(p.steps), cfg: Number(p.cfg), sampler_name: String(p.sampler), scheduler: String(p.scheduler), denoise: 1.0, model: ["1", 0], positive: ["4", 0], negative: ["4", 1], latent_image: ["5", 0] } },
+        "8": { class_type: "VAEDecode", inputs: { samples: ["6", 0], vae: ["3", 0] } },
+        "9": { class_type: "SaveImage", inputs: { images: ["8", 0], filename_prefix: "saas_hub_qwen21" } },
+      };
+      // Los modelos de upscale descartan el canal alfa.
+      return transparent ? workflow : applyUpscale(workflow, "9", String(p.upscale));
     },
   },
 
   "flux-2-klein": {
     id: "flux-2-klein",
     name: "FLUX 2 Klein",
-    description: "FLUX 2 Klein 9B FP8 - modelo más reciente, 9B parámetros",
+    description: "FLUX 2 Klein 9B destilado - fotografía realista en 4 pasos",
     emoji: "✨",
-    defaultParams: { width: 1024, height: 1024, steps: 20, cfg: 1.0, sampler: "euler", scheduler: "simple", weight_dtype: "default", upscale: "ninguno" },
+    defaultParams: { width: 1024, height: 1024, steps: 4, cfg: 1.0, sampler: "euler", weight_dtype: "default", upscale: "ninguno" },
     params: [
       { id: "width", label: "Ancho", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
       { id: "height", label: "Alto", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
-      { id: "steps", label: "Pasos", type: "number", default: 20, min: 1, max: 100, step: 1 },
+      { id: "steps", label: "Pasos", type: "number", default: 4, min: 1, max: 50, step: 1 },
       { id: "cfg", label: "CFG", type: "number", default: 1.0, min: 0.5, max: 30, step: 0.5 },
       { id: "sampler", label: "Sampler", type: "select", default: "euler", options: [
         { value: "euler", label: "Euler" }, { value: "heun", label: "Heun" }, { value: "dpm_2", label: "DPM2" }, { value: "dpmpp_2m", label: "DPM++ 2M" },
-      ]},
-      { id: "scheduler", label: "Scheduler", type: "select", default: "simple", options: [
-        { value: "simple", label: "Simple" }, { value: "normal", label: "Normal" }, { value: "karras", label: "Karras" },
       ]},
       { id: "weight_dtype", label: "Precisión", type: "select", default: "default", options: [
         { value: "default", label: "Default" }, { value: "fp8_e4m3fn", label: "FP8 E4M3" }, { value: "fp8_e4m3fn_fast", label: "FP8 E4M3 Fast" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
-    buildWorkflow(prompt, p, negative = "") {
+    buildWorkflow(prompt, p, _negative = "") {
+      const width = alignRes(Number(p.width) || 1024);
+      const height = alignRes(Number(p.height) || 1024);
       const wf = {
-        "3": { class_type: "KSampler", inputs: { seed: seed(), steps: p.steps, cfg: p.cfg, sampler_name: String(p.sampler), scheduler: String(p.scheduler), denoise: 1.0, model: ["10", 0], positive: ["6", 0], negative: ["13", 0], latent_image: ["5", 0] } },
-        "5": { class_type: "EmptySD3LatentImage", inputs: { width: alignRes(Number(p.width)), height: alignRes(Number(p.height)), batch_size: 1 } },
-        "10": { class_type: "UNETLoader", inputs: { unet_name: "flux-2-klein-9b-fp8.safetensors", weight_dtype: String(p.weight_dtype) } },
-        "14": { class_type: "DualCLIPLoader", inputs: { clip_name1: "t5xxl_fp16.safetensors", clip_name2: "clip_l.safetensors", type: "flux" } },
-        "15": { class_type: "VAELoader", inputs: { vae_name: "ae.safetensors" } },
-        "6": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["14", 0] } },
-        "13": { class_type: "CLIPTextEncode", inputs: { text: negative, clip: ["14", 0] } },
-        "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["15", 0] } },
-        "9": { class_type: "SaveImage", inputs: { images: ["8", 0], filename_prefix: "saas_hub" } },
+        "1": { class_type: "UNETLoader", inputs: { unet_name: "flux-2-klein-9b-fp8.safetensors", weight_dtype: String(p.weight_dtype || "default") } },
+        "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_8b_fp8mixed.safetensors", type: "flux2", device: "default" } },
+        "3": { class_type: "VAELoader", inputs: { vae_name: "flux2-vae.safetensors" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { clip: ["2", 0], text: prompt } },
+        "5": { class_type: "ConditioningZeroOut", inputs: { conditioning: ["4", 0] } },
+        "6": { class_type: "EmptyFlux2LatentImage", inputs: { width, height, batch_size: 1 } },
+        "7": { class_type: "Flux2Scheduler", inputs: { steps: Number(p.steps), width, height } },
+        "8": { class_type: "KSamplerSelect", inputs: { sampler_name: String(p.sampler) } },
+        "10": { class_type: "RandomNoise", inputs: { noise_seed: seed() } },
+        "11": { class_type: "CFGGuider", inputs: { model: ["1", 0], positive: ["4", 0], negative: ["5", 0], cfg: Number(p.cfg) } },
+        "12": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["10", 0], guider: ["11", 0], sampler: ["8", 0], sigmas: ["7", 0], latent_image: ["6", 0] } },
+        "13": { class_type: "VAEDecode", inputs: { samples: ["12", 0], vae: ["3", 0] } },
+        "9": { class_type: "SaveImage", inputs: { images: ["13", 0], filename_prefix: "saas_hub" } },
       };
       return applyUpscale(wf, "9", String(p.upscale));
     },
@@ -798,7 +874,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         { value: "normal", label: "Normal" }, { value: "karras", label: "Karras" }, { value: "sgm_uniform", label: "SGM Uniform" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
     buildWorkflow(prompt, p, negative = "") {
@@ -818,13 +894,13 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
   "z-image-turbo": {
     id: "z-image-turbo",
     name: "Z-Image-Turbo",
-    description: "Z-Image-Turbo - modelo rápido (4-8 pasos) con soporte de texto y alta fidelidad",
+    description: "Z-Image-Turbo - fotografía y composición en 8 pasos (recomendado para fondos)",
     emoji: "🚀",
-    defaultParams: { width: 1024, height: 1024, steps: 4, cfg: 1.0, sampler: "res_multistep", scheduler: "simple", upscale: "ninguno" },
+    defaultParams: { width: 1024, height: 1024, steps: 8, cfg: 1.0, sampler: "res_multistep", scheduler: "simple", upscale: "ninguno" },
     params: [
       { id: "width", label: "Ancho", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
       { id: "height", label: "Alto", type: "number", default: 1024, min: 256, max: 2048, step: 16 },
-      { id: "steps", label: "Pasos", type: "number", default: 4, min: 1, max: 24, step: 1 },
+      { id: "steps", label: "Pasos", type: "number", default: 8, min: 1, max: 24, step: 1 },
       { id: "cfg", label: "CFG", type: "number", default: 1.0, min: 1.0, max: 10.0, step: 0.5 },
       { id: "sampler", label: "Sampler", type: "select", default: "res_multistep", options: [
         { value: "res_multistep", label: "Res Multistep" },
@@ -837,7 +913,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         { value: "karras", label: "Karras" },
       ]},
       { id: "upscale", label: "Upscale", type: "select", default: "ninguno", options: [
-        { value: "ninguno", label: "Ninguno" }, { value: "ultrasharp", label: "4x UltraSharp (detalle)" }, { value: "realesrgan", label: "4x RealESRGAN (fotorrealista)" },
+        { value: "ninguno", label: "Ninguno" }, { value: "refinado", label: "Refinado 2x (rehace el detalle, más lento)" }, { value: "ultrasharp", label: "UltraSharp 2x (detalle)" }, { value: "realesrgan", label: "RealESRGAN 2x (fotorrealista)" },
       ]},
     ],
     buildWorkflow(prompt, p, negative = "") {
@@ -846,7 +922,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
       const s = seed();
 
       const wf = {
-        "1": { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_4b.safetensors", type: "ideogram4", device: "default" } },
+        "1": { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_4b.safetensors", type: "lumina2", device: "default" } },
         "2": { class_type: "UNETLoader", inputs: { unet_name: "z_image_turbo_bf16.safetensors", weight_dtype: "default" } },
         "3": { class_type: "VAELoader", inputs: { vae_name: "ae.safetensors" } },
         "4": { class_type: "CLIPTextEncode", inputs: { clip: ["1", 0], text: prompt } },
@@ -857,6 +933,7 @@ export const GENERATORS: Record<ImageGenerator, GeneratorConfig> = {
         "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
         "10": { class_type: "SaveImage", inputs: { images: ["9", 0], filename_prefix: "saas_hub" } },
       };
+      if (p.upscale === "refinado") return applyZImageRefine(wf);
       return applyUpscale(wf, "10", String(p.upscale));
     },
   },
@@ -1049,131 +1126,6 @@ export function hexToColorName(hex: string): string {
   return colorName;
 }
 
-// Construye un prompt estructurado en JSON para Ideogram 4
-// Sigue el formato oficial: high_level_description + style_description + compositional_deconstruction
-export function buildIdeogramPrompt(
-  subject: string,
-  text: string,
-  styleValue: string,
-  details: string,
-  width: number = 1024,
-  height: number = 1024,
-  textStylePreset: string = "modern-white",
-  subtitle: string = "",
-  subtitleStyle: string = "clean-white",
-  bullets: string = ""
-): string {
-  // Calcular aspect ratio
-  const g = gcd(width, height);
-  const aspectRatio = `${width / g}:${height / g}`;
-
-  const style = IMAGE_STYLES.find((s) => s.value === styleValue);
-  const cleanedText = text.trim().replace(/"/g, "'");
-
-  // Construir elementos
-  const elements: any[] = [];
-
-  // Elemento principal: el sujeto
-  if (subject.trim()) {
-    elements.push({
-      type: "obj",
-      desc: subject.trim(),
-    });
-  }
-
-  // Elemento de texto si se especificó
-  if (cleanedText) {
-    let styleText = "";
-    if (textStylePreset === "modern-white") {
-      styleText = "written in a clean modern bold sans-serif font of pure white color, with a soft black drop shadow for high contrast and perfect readability";
-    } else if (textStylePreset === "sticker-black") {
-      styleText = "printed in clean solid black sans-serif lettering inside a bright yellow or white rectangular block style banner/sticker";
-    } else if (textStylePreset === "neon-glow") {
-      styleText = "rendered as vibrant neon glowing letters of electric cyan or hot pink hue, emitting soft ambient light on the surrounding area";
-    } else if (textStylePreset === "luxury-gold") {
-      styleText = "crafted as classic elegant serif letters with a 3D shiny polished gold metallic texture, showing light reflections and premium feel";
-    } else if (textStylePreset === "3d-inflated") {
-      styleText = "designed as volumetric 3D inflated bubble letters with glossy plastic finish, bright contrasting colors and friendly soft round corners";
-    } else {
-      styleText = "written clearly and legibly with a clean font design and high contrast";
-    }
-
-    elements.push({
-      type: "text",
-      text: cleanedText,
-      desc: `Main title text spelling exactly "${cleanedText}", ${styleText}, with razor-sharp contours, perfectly formed font glyphs, flawless letter geometry, high legibility, zero deformed characters, prominently positioned`,
-    });
-  }
-
-  // Elemento de subtítulo si se especificó
-  if (subtitle.trim()) {
-    const cleanedSubtitle = subtitle.trim().replace(/"/g, "'");
-    let styleText = "";
-    if (subtitleStyle === "clean-white") {
-      styleText = "written in a clean, neat modern sans-serif font of pure white color, smaller than the main title, with sharp contrast, perfectly formed letters and high readability";
-    } else if (subtitleStyle === "clean-black") {
-      styleText = "written in a clean, neat modern sans-serif font of solid black color, smaller than the main title, with high contrast, sharp contours and high readability";
-    } else if (subtitleStyle === "soft-gray") {
-      styleText = "written in a modern sans-serif font of elegant light gray or silver color, smaller than the main title, subtle, sharp and premium";
-    } else if (subtitleStyle === "neon-glow") {
-      styleText = "rendered in sharp neon glowing letters of cyan or hot pink, smaller than the main title, well-defined letter shapes emitting soft neon light";
-    } else {
-      styleText = "written clearly and legibly with clean typography and perfectly formed letters";
-    }
-
-    elements.push({
-      type: "text",
-      text: cleanedSubtitle,
-      desc: `Subtitle text spelling exactly "${cleanedSubtitle}", positioned directly below or near the main title, ${styleText}`,
-    });
-  }
-
-  // Características / Viñetas
-  if (bullets.trim()) {
-    const bulletList = bullets.split(",").map(b => b.trim()).filter(Boolean);
-    if (bulletList.length > 0) {
-      const listDesc = bulletList.map(b => `"${b}"`).join(", ");
-      elements.push({
-        type: "text",
-        text: bulletList.join(" | "),
-        desc: `A vertical list of feature bullet points displaying ${listDesc}, written in small, crisp, highly legible clean sans-serif white or black letters with sharp well-formed glyphs, positioned in the bottom-left or bottom area of the layout`,
-      });
-    }
-  }
-
-  // Background
-  const background = details.trim()
-    || `${style ? style.prompt.split(",")[0] + " atmosphere" : "Clean, well-lit professional background"}`
-    || "Clean, professional background with balanced lighting";
-
-  // Style description
-  const styleDescription: any = {};
-  if (style && style.prompt) {
-    styleDescription.aesthetics = style.prompt;
-  }
-
-  // High-level description
-  let hld = subject.trim();
-  if (cleanedText) hld += ` featuring the text "${cleanedText}"`;
-  if (style) hld += `, ${style.prompt.split(",")[0]}`;
-  if (details.trim()) hld += `, ${details.trim().toLowerCase()}`;
-
-  const jsonObj: any = {
-    aspect_ratio: aspectRatio,
-    high_level_description: hld,
-    compositional_deconstruction: {
-      background,
-      elements,
-    },
-  };
-
-  if (Object.keys(styleDescription).length > 0) {
-    jsonObj.style_description = styleDescription;
-  }
-
-  return JSON.stringify(jsonObj);
-}
-
 // Construye un prompt plano y jerarquizado (para Z-Image-Turbo, FLUX, RealVis, etc.)
 export function buildRichPrompt(
   subject: string,
@@ -1257,7 +1209,12 @@ export function buildRichPrompt(
   }
 
   // 5. Título Principal y Contenedor de Diseño (Tarjetas flotantes, formas y badges publicitarios)
-  if (text.trim()) {
+  if (text.trim() && generatorId === "qwen-image-2.1") {
+    // Qwen escribe bien el español con una instrucción directa y sin adornos.
+    parts.push(
+      `${spatialPosition}, a large bold clean sans-serif headline that reads "${text.trim().replace(/"/g, "'")}", generous margins, high contrast, professional advertising layout`,
+    );
+  } else if (text.trim()) {
     const cleanedText = text.trim().replace(/"/g, "'").toUpperCase();
     
     let containerDesc = `displaying the exact text "${cleanedText}" in ultra-sharp, bold modern sans-serif vector typography, perfectly formed glyphs, flawless letter geometry, solid pure white font, high legibility, clean floating dark glassmorphism card container with rounded corners and a glowing electric blue underline bar`;

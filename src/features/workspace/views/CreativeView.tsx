@@ -49,6 +49,7 @@ export default function CreativeView({
     renderingConceptEngine,
     handleCopyConceptCopy,
     setComposerInitialImage,
+    setComposerInitialCopy,
     setTab,
     handleConceptToPublish,
   } = controller;
@@ -187,11 +188,14 @@ export default function CreativeView({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-[#0b0b14] border-white/[0.08] rounded-xl text-xs max-h-60">
+                    <SelectItem value="refinado">
+                      Refinado 2x (rehace el detalle)
+                    </SelectItem>
                     <SelectItem value="ultrasharp">
-                      4x UltraSharp (detalle)
+                      UltraSharp 2x (detalle)
                     </SelectItem>
                     <SelectItem value="realesrgan">
-                      4x RealESRGAN (fotorrealista)
+                      RealESRGAN 2x (fotorrealista)
                     </SelectItem>
                     <SelectItem value="ninguno">Sin upscale</SelectItem>
                   </SelectContent>
@@ -259,7 +263,7 @@ export default function CreativeView({
                       </Badge>
                       {concept.image && (
                         <Badge className="bg-emerald-500/20 border-emerald-500/30 text-emerald-300 text-[9px] px-2 py-0.5">
-                          upscale 4x
+                          imagen final
                         </Badge>
                       )}
                     </div>
@@ -300,7 +304,7 @@ export default function CreativeView({
                           }
                           disabled={renderingConceptIdx === idx}
                           className="h-8 text-[10px] font-bold rounded-xl bg-gradient-to-r from-amber-600/25 to-orange-600/25 border border-amber-500/30 hover:bg-amber-500/20 text-amber-300 transition-all duration-300 flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
-                          title="Renderizar localmente con ComfyUI y upscale 4x"
+                          title="Renderizar localmente con ComfyUI"
                         >
                           {renderingConceptIdx === idx &&
                           renderingConceptEngine === "comfyui" ? (
@@ -358,6 +362,16 @@ export default function CreativeView({
                       <button
                         onClick={() => {
                           setComposerInitialImage(concept.image);
+                          setComposerInitialCopy(
+                            concept.headline
+                              ? {
+                                  headline: concept.headline,
+                                  subtitle: concept.subtitle,
+                                  cta: concept.cta,
+                                  aspectRatio: concept.aspectRatio,
+                                }
+                              : null,
+                          );
                           setTab("composer");
                         }}
                         className="h-9 px-2.5 text-[10px] font-semibold rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-all flex items-center justify-center gap-1 cursor-pointer"
