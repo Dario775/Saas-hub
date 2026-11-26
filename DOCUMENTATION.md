@@ -34,6 +34,19 @@ La copia previa de la refactorización está en `.refactor-backup/2026-09-10`. C
 
 `src/lib/flyers` crea cuatro propuestas por pedido. Claude dirige y elige entre diez sistemas de diseño (`templates*.ts`); ComfyUI genera la foto u objeto solo si el sistema lo pide; Chrome o Edge en modo oculto convierte el HTML en PNG de 2160 px (`CHROME_PATH` permite indicar otro navegador); Claude revisa la imagen y corrige hasta dos veces. Los textos se validan y se escapan antes de dibujar. Corre un trabajo por vez. Los datos quedan en `flyers-data/`, fuera de Git. "Editar en el editor de diseño" vuelve a dibujar el flyer en dos modos (`export-script.ts`): uno mide cada texto (posición, fuente, color, cortes de línea y opacidad) y otro genera el fondo sin esos textos; el editor los recibe como capas. Lo marcado con `data-static` en un diseño queda en el fondo.
 
+### Flyers animados
+
+"Animar" convierte un flyer terminado en un MP4 de 10, 12 o 15 segundos, con la placa final de la marca. Usa el mismo HTML del flyer (`src/lib/motion/motion-html.ts`) y le suma una coreografía GSAP por diseño (`tools/motion/runtime/choreography.js`). HyperFrames lo renderiza en local, sin GPU ni servicios externos.
+
+- Todo sigue un tempo de 120 BPM (`MOTION_BPM`): las entradas arrancan en la grilla de corcheas y la placa final cae justo en un tiempo.
+- Tres tiempos sin cortes. Primero, un gancho de un compás (`MOTION_HOOK`): el titular en grande, palabra por palabra. Después, esas palabras viajan a su lugar exacto en el flyer y el diseño se arma alrededor. Al final, un círculo del color de acento crece desde el elemento clave (el ticket, el botón, el último mensaje) y se vuelve la placa de la marca. Si el titular ya ocupa casi todo el flyer (afirmación, oferta, objeto), no hay viaje y el diseño usa su entrada normal.
+- Se graba a 150 fps y ffmpeg mezcla cada 5 cuadros en uno (`MOTION_SUBFRAMES`): el video sale a 30 fps con desenfoque de movimiento real.
+
+- El renderizador vive en `tools/motion`, con sus propias dependencias. Se instala con `npm ci --prefix tools/motion --ignore-scripts`. Usa el Chrome que descarga HyperFrames en `~/.cache/hyperframes`.
+- El sonido se genera en código (`src/lib/motion/sound.ts`): bombo, palmas y acordes sobre el tempo, una subida antes de la marca y un impacto cuando entra. No necesita archivos ni licencias.
+- Si hay pistas en `motion-music/` (o en `MOTION_MUSIC_DIR`), el panel elige una por flyer y la usa en lugar del ritmo, con la subida y el impacto encima. Solo deben ir pistas libres de derechos; la carpeta no se sube a Git. ffmpeg (`FFMPEG_PATH`) mezcla todo y lo deja a -14 LUFS, el volumen de las redes.
+- El video queda en `public/generated-videos/` y se publica como cualquier otro video del panel. Se arma un video por vez. Si el flyer se ajusta, el video anterior se descarta.
+
 ## Publicaciones
 
 Los endpoints comparten validación y `social-dispatcher.ts`. El motor nativo admite publicación directa y programada en Facebook, Instagram (Business/Reels), LinkedIn y X (Twitter). n8n ha sido completamente desvinculado del sistema.
