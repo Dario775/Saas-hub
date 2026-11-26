@@ -106,37 +106,62 @@ export async function runPendingScheduledPosts(onlyId?: string) {
   return { ranCount: claimed.length, published, failed };
 }
 
-async function reconcileNativePosts() {
+/**
+ * Tras este plazo, una programación nativa que Facebook no confirma deja de
+ * consultarse y pasa a revisión manual. Antes, se reintenta en cada ciclo.
+ */
+export const RECONCILE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+const NOT_PUBLISHED =
+  "Facebook no confirmó esta publicación programada. Revisala en Meta Business Suite antes de volver a programarla.";
+const CHECK_FAILED =
+  "No se pudo confirmar con Facebook: la conexión de la página no responde. Reconectá la página y revisá la publicación en Meta Business Suite.";
+
+type Check = { published: true; permalink: string | null } | { published: false; reason: string };
+
+async function checkNativePost(post: ScheduledPost): Promise<Check> {
+  const page = getAllPages().find((page) => page.id === post.pageId);
+  if (!page?.accessToken || !post.postId) return { published: false, reason: CHECK_FAILED };
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v21.0/${post.postId}?fields=is_published,permalink_url`,
+      {
+        headers: { Authorization: `Bearer ${page.accessToken}` },
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) return { published: false, reason: CHECK_FAILED };
+    return data.is_published
+      ? { published: true, permalink: data.permalink_url || null }
+      : { published: false, reason: NOT_PUBLISHED };
+  } catch {
+    // Una consulta fallida nunca provoca otro envío.
+    return { published: false, reason: CHECK_FAILED };
+  }
+}
+
+/** Confirma las programaciones nativas vencidas con Facebook. */
+export async function reconcileNativePosts(now = Date.now()) {
   const due = readDB().filter(
-    (post) =>
-      post.fbScheduled &&
-      post.status === "scheduled" &&
-      Date.parse(post.scheduledAt) < Date.now(),
+    (post) => post.fbScheduled && post.status === "scheduled" && Date.parse(post.scheduledAt) < now,
   );
   for (const post of due) {
-    const page = getAllPages().find((page) => page.id === post.pageId);
-    if (!page || !post.postId) continue;
-    try {
-      const response = await fetch(
-        `https://graph.facebook.com/v21.0/${post.postId}?fields=is_published,permalink_url`,
-        {
-          headers: { Authorization: `Bearer ${page.accessToken}` },
-          signal: AbortSignal.timeout(8_000),
-        },
-      );
-      const data = await response.json();
-      if (response.ok && data.is_published)
-        await mutateSchedule((posts) => {
-          const target = posts.find((item) => item.id === post.id);
-          if (target?.status === "scheduled") {
-            target.status = "published";
-            target.publishedAt = new Date().toISOString();
-            target.permalink = data.permalink_url || null;
-          }
-        });
-    } catch {
-      /* A failed status read must never trigger another publication. */
-    }
+    const check = await checkNativePost(post);
+    const expired = now - Date.parse(post.scheduledAt) > RECONCILE_GRACE_MS;
+    if (!check.published && !expired) continue;
+    await mutateSchedule((posts) => {
+      const target = posts.find((item) => item.id === post.id);
+      if (target?.status !== "scheduled") return;
+      if (check.published) {
+        target.status = "published";
+        target.publishedAt = new Date().toISOString();
+        target.permalink = check.permalink;
+      } else {
+        target.status = "failed";
+        target.error = check.reason;
+      }
+    });
   }
 }
 
