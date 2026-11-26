@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { COMMERCIAL_CATEGORIES, resolveCategory } from "@/lib/commercial-taxonomy";
 import { discoverLeads, importCandidates } from "@/lib/lead-discovery";
 import type { LeadCandidate } from "@/lib/lead-discovery";
+import { ALLOWED_RADIUS_KM } from "@/lib/overpass";
 
 export const dynamic = "force-dynamic";
 
@@ -69,11 +70,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const radiusKm = body.radiusKm;
+    if (
+      radiusKm !== undefined &&
+      (typeof radiusKm !== "number" || !ALLOWED_RADIUS_KM.includes(radiusKm))
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Radio no permitido. Elegí uno de estos, en km: " + ALLOWED_RADIUS_KM.join(", ") + ".",
+        },
+        { status: 400 },
+      );
+    }
+
     const max = typeof body.max === "number" ? body.max : 20;
     const result = await discoverLeads({
       location,
       category,
       max,
+      radiusKm,
     });
 
     return NextResponse.json({
@@ -84,6 +100,8 @@ export async function POST(request: NextRequest) {
       candidates: result.candidates,
       metrics: result.metrics,
       errors: result.errors,
+      geocode: result.geocode,
+      overpass: result.overpass,
       note: "Vista previa: no se importó nada. La importación requiere acción humana.",
     });
   } catch (error) {

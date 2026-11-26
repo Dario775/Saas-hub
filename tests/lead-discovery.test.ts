@@ -63,6 +63,10 @@ function fakeServices(elements: unknown[]) {
           display_name: "Salta Capital, Salta, Argentina",
           lat: "-24.78",
           lon: "-65.41",
+          class: "place",
+          type: "city",
+          place_rank: 16,
+          importance: 0.6,
           boundingbox: ["-24.9", "-24.6", "-65.5", "-65.3"],
         },
       ]);

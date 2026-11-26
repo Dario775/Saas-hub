@@ -48,6 +48,7 @@ Zap
 } from "lucide-react";
 import { useEffect,useState } from "react";
 import { toast } from "sonner";
+import { DiscoveryPanel } from "./DiscoveryPanel";
 
 const POPULAR_LOCATIONS: LocationItem[] = PREDEFINED_LOCATIONS.filter((l) =>
   [
@@ -1054,6 +1055,8 @@ export function LeadsView({ brandContext }: LeadsViewProps) {
         </CardContent>
       </Card>
 
+      <DiscoveryPanel defaultLocation={zonaInput} onImported={fetchLeads} />
+
       {/* Barra de Filtros del Pipeline CRM */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1934,7 +1937,7 @@ ${demoUrl}
 
                 <section className="space-y-1">
                   <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Análisis DeepSeek
+                    Análisis con IA
                   </h4>
                   {analysisResult.analysis?.ok ? (
                     <p className="text-slate-300">

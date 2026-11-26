@@ -1,5 +1,5 @@
 import { leadIdentity, normalizeIdentityText, osmPlaceId } from "./lead-identity";
-import { matchBusinessIdentity, normalizePhoneDigits } from "./identity-match";
+import { matchBusinessIdentity } from "./identity-match";
 import { makeEvidence } from "./lead-evidence";
 import type { LeadEvidence } from "./lead-evidence";
 import { mergeLeadSearch } from "./lead-merge";
@@ -8,10 +8,13 @@ import type { LeadItem } from "./leads-service";
 import type { CommercialCategory } from "./commercial-taxonomy";
 import { categoryTags } from "./commercial-taxonomy";
 import {
-  buildAreaQueryByName,
+  ALLOWED_RADIUS_KM,
+  DEFAULT_RADIUS_KM,
+  bboxDimensions,
   buildCategoryQuery,
   geocodeArea,
   queryOverpass,
+  radiusBoundingBox,
 } from "./overpass";
 import type { BoundingBox, OverpassElement } from "./overpass";
 import type { fetchWithRetry } from "./fetch-helper";
@@ -101,6 +104,27 @@ export interface DiscoveryResult {
   candidates: LeadCandidate[];
   metrics: DiscoveryMetrics;
   errors: string[];
+  /** Cómo se resolvió la zona (observabilidad de la decisión geográfica). */
+  geocode?: {
+    queryUsed: string;
+    displayName: string;
+    class?: string;
+    type?: string;
+    placeRank?: number;
+    importance?: number;
+    score: number;
+    scoreReasons: string[];
+    center: { lat: number; lon: number };
+    radiusKm: number;
+    dimensionsKm: { heightKm: number; widthKm: number };
+    consideredVariants: string[];
+  };
+  /** Qué instancia de Overpass respondió y cómo fue cada intento. */
+  overpass?: {
+    endpoint?: string;
+    durationMs: number;
+    attempts: { endpoint: string; durationMs: number; status?: number; error?: string; outcome: string }[];
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -366,6 +390,8 @@ export interface DiscoverLeadsOptions {
   location: string;
   category: CommercialCategory;
   max?: number;
+  /** Radio de la ventana de descubrimiento, en kilómetros (5/10/20/25). */
+  radiusKm?: number;
   timeoutMs?: number;
   /** Inyectable para tests: evita consumir servicios reales. */
   requestImpl?: typeof fetchWithRetry;
@@ -395,37 +421,72 @@ export async function discoverLeads(options: DiscoverLeadsOptions): Promise<Disc
   });
   metrics.requestsBySource.nominatim = 1;
   metrics.durationBySource.nominatim = Date.now() - geoStarted;
-  // Si el geocodificador falla, se intenta resolver el área directamente con
-  // Overpass (area[name=...]), sin inventar geografía.
-  const useAreaFallback = !geocoded.ok || !geocoded.area;
-  if (useAreaFallback) {
-    errors.push(geocoded.error || "No se pudo resolver la zona con el geocodificador.");
+  if (!geocoded.ok || !geocoded.area) {
+    return {
+      areaName: options.location,
+      categoryId: options.category.id,
+      categoryLabel: options.category.label,
+      boundingBox: { south: 0, west: 0, north: 0, east: 0 },
+      candidates: [],
+      metrics,
+      errors: [geocoded.error || "No se pudo resolver la zona indicada."],
+    };
   }
 
-  const resolvedArea = geocoded.area;
-  const areaLabel = resolvedArea ? resolvedArea.displayName : options.location;
-  const query = resolvedArea
-    ? buildCategoryQuery(options.category.tags, resolvedArea.boundingBox, max * 3)
-    : buildAreaQueryByName(options.location.split(",")[0].trim(), options.category.tags, max * 3);
-  const overpassStarted = Date.now();
+  // Se busca dentro de una ventana acotada alrededor del centro de la
+  // localidad: no se envía el bbox administrativo completo (departamento o
+  // municipio entero), que satura la instancia pública y devuelve timeouts.
+  const area = geocoded.area;
+  const areaLabel = area.displayName;
+  const center = {
+    lat: area.lat ?? (area.boundingBox.south + area.boundingBox.north) / 2,
+    lon: area.lon ?? (area.boundingBox.west + area.boundingBox.east) / 2,
+  };
+  const requestedRadius = options.radiusKm ?? DEFAULT_RADIUS_KM;
+  const radiusKm = ALLOWED_RADIUS_KM.includes(requestedRadius) ? requestedRadius : DEFAULT_RADIUS_KM;
+  const window = radiusBoundingBox(center, radiusKm);
+  const query = buildCategoryQuery(options.category.tags, window, max * 3);
   const outcome = await queryOverpass(query, {
     timeoutMs: options.timeoutMs,
     requestImpl: options.requestImpl,
   });
-  metrics.requestsBySource.overpass = 1;
-  metrics.durationBySource.overpass = Date.now() - overpassStarted;
+  metrics.requestsBySource.overpass = outcome.attempts.length || 1;
+  metrics.durationBySource.overpass = outcome.durationMs;
   if (!outcome.ok && !errors.includes(outcome.error || "")) {
     errors.push(outcome.error || "Overpass no respondió.");
   }
+  // Se informa siempre, también cuando no hay comercios o Overpass falla.
+  const trace: Pick<DiscoveryResult, "geocode" | "overpass"> = {
+    geocode: {
+      queryUsed: area.queryUsed,
+      displayName: area.displayName,
+      class: area.class,
+      type: area.type,
+      placeRank: area.placeRank,
+      importance: area.importance,
+      score: area.score,
+      scoreReasons: area.scoreReasons,
+      center,
+      radiusKm,
+      dimensionsKm: bboxDimensions(window),
+      consideredVariants: geocoded.considered || [],
+    },
+    overpass: {
+      endpoint: outcome.endpoint,
+      durationMs: outcome.durationMs,
+      attempts: outcome.attempts,
+    },
+  };
   if (!outcome.elements.length) {
     return {
-      areaName: geocoded.area?.displayName || options.location,
+      areaName: areaLabel,
       categoryId: options.category.id,
       categoryLabel: options.category.label,
-      boundingBox: geocoded.area?.boundingBox || { south: 0, west: 0, north: 0, east: 0 },
+      boundingBox: window,
       candidates: [],
       metrics,
       errors: errors.length ? errors : ["Overpass no devolvió negocios para esa zona y categoría."],
+      ...trace,
     };
   }
   if (!outcome.ok) errors.push(outcome.error || "Overpass no respondió.");
@@ -457,13 +518,14 @@ export async function discoverLeads(options: DiscoverLeadsOptions): Promise<Disc
   metrics.durationBySource.total = Date.now() - started;
 
   return {
-    areaName: resolvedArea ? resolvedArea.displayName : options.location,
+    areaName: areaLabel,
     categoryId: options.category.id,
     categoryLabel: options.category.label,
-    boundingBox: resolvedArea ? resolvedArea.boundingBox : { south: 0, west: 0, north: 0, east: 0 },
+    boundingBox: window,
     candidates: limited,
     metrics,
     errors,
+    ...trace,
   };
 }
 
