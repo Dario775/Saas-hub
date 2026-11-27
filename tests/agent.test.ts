@@ -5,7 +5,7 @@ import path from "node:path";
 import test, { after, before } from "node:test";
 import { normalizeIntent, type CampaignRequest } from "../src/lib/agent/intent";
 import { agentModel } from "../src/lib/agent/provider";
-import { planSlots } from "../src/lib/agent/slots";
+import { planSlots, readTime, readTimes } from "../src/lib/agent/slots";
 import type { Flyer, FlyerJob } from "../src/lib/flyers/types";
 import type { ScheduledPost } from "../src/lib/schedule-types";
 import { FLYER_SAMPLES } from "./flyer-samples";
@@ -25,7 +25,7 @@ test("el pedido se convierte en una campaña validada", () => {
   );
   assert.deepEqual(intent, {
     kind: "campaign",
-    request: { brandId: "obsidiana", images: 10, videos: 5, days: 3, startDate: null, brief: "stock", format: "9:16", style: "auto" },
+    request: { brandId: "obsidiana", images: 10, videos: 5, days: 3, startDate: null, brief: "stock", format: "9:16", style: "auto", templates: [], times: [] },
   });
 });
 
@@ -54,6 +54,38 @@ test("los horarios se reparten parejo y los videos no se amontonan", () => {
   const videos = slots.map((slot, index) => (slot.media === "video" ? index : -1)).filter((index) => index >= 0);
   assert.equal(videos.length, 5);
   assert.ok(videos.every((position, index) => index === 0 || position - videos[index - 1] === 3), "un video cada tres piezas");
+});
+
+test("entiende diseños y horarios pedidos, y estira los días si no alcanzan", () => {
+  const intent = normalizeIntent(
+    JSON.stringify({ action: "campaign", brandId: "obsidiana", flyers: 6, videos: 0, days: 2, templates: ["chat", "CHAT", "inventado", "foto"], times: ["18:00", "9", "25:00", "09:00"] }),
+    BRANDS,
+    NOW,
+  );
+  assert.equal(intent.kind, "campaign");
+  if (intent.kind !== "campaign") return;
+  assert.deepEqual(intent.request.templates, ["chat", "foto"], "solo diseños que existen, sin repetir");
+  assert.deepEqual(intent.request.times, ["09:00", "18:00"], "horas válidas, ordenadas y sin repetir");
+  assert.equal(intent.request.days, 3, "6 piezas a 2 horarios por día necesitan 3 días");
+  const tooLong = normalizeIntent(JSON.stringify({ action: "campaign", brandId: "obsidiana", flyers: 20, days: 1, times: ["10:00"] }), BRANDS, NOW);
+  assert.match((tooLong as { text: string }).text, /serían 20 días; el máximo es 14/);
+});
+
+test("las horas se leen en varios formatos", () => {
+  assert.equal(readTime("9"), "09:00");
+  assert.equal(readTime("20.30"), "20:30");
+  assert.equal(readTime("21:15 hs"), "21:15");
+  assert.equal(readTime("24:00"), null);
+  assert.equal(readTime("tarde"), null);
+  assert.deepEqual(readTimes(["1", "2", "3", "4", "5", "6", "7"]).length, 6, "como mucho seis por día");
+});
+
+test("con horarios pedidos, cada día sale a esas horas", () => {
+  const slots = planSlots({ images: 5, videos: 0, days: 3, startDate: null, times: ["10:00", "20:30"] }, NOW);
+  assert.deepEqual(
+    slots.map((slot) => `${slot.at.getDate()} ${slot.at.getHours()}:${String(slot.at.getMinutes()).padStart(2, "0")}`),
+    ["27 10:00", "27 20:30", "28 10:00", "28 20:30", "29 10:00"],
+  );
 });
 
 test("si hoy ya es tarde, los horarios que no llegan pasan al día siguiente", () => {
@@ -145,9 +177,11 @@ function fakeDeps() {
     hasAsset: false,
     revision: 1,
   });
+  const templatesAsked: Array<string[] | undefined> = [];
   const deps = {
     loadBrand: (id: string) => ({ id, name: "Obsidiana", website: "", description: "", audience: "", valueProposition: "", voice: "", primary: "#000", accent: "#fff", headingFont: "Inter" }),
-    startJob: async () => {
+    startJob: async (input: { templates?: string[] }) => {
+      templatesAsked.push(input.templates);
       const job: FlyerJob = { id: `job-${jobs.length}`, brandId: "obsidiana", brief: "", format: "4:5", model: "m", status: "done", step: "", createdAt: "", flyers: [0, 1, 2, 3].map((index) => flyer(jobs.length * 4 + index)) };
       jobs.push(job);
       return { job, done: Promise.resolve() };
@@ -178,10 +212,10 @@ function fakeDeps() {
     wait: async () => {},
     now: () => NOW,
   };
-  return { deps, jobs, said, scheduled, counts: () => ({ previews, approvals }) };
+  return { deps, jobs, said, scheduled, templatesAsked, counts: () => ({ previews, approvals }) };
 }
 
-const REQUEST: CampaignRequest = { brandId: "obsidiana", images: 4, videos: 2, days: 2, startDate: null, brief: "", format: "4:5", style: "tranquilo" };
+const REQUEST: CampaignRequest = { brandId: "obsidiana", images: 4, videos: 2, days: 2, startDate: null, brief: "", format: "4:5", style: "tranquilo", templates: ["chat"], times: [] };
 
 test("una campaña crea, anima, pide aprobación y recién ahí programa", async () => {
   const fake = fakeDeps();
@@ -190,6 +224,7 @@ test("una campaña crea, anima, pide aprobación y recién ahí programa", async
   await done;
   assert.equal(campaign.isCampaignRunning(), false);
   assert.equal(fake.jobs.length, 2, "dos tandas de cuatro para seis piezas");
+  assert.deepEqual(fake.templatesAsked, [["chat"], ["chat"]], "cada tanda pide el diseño elegido");
   const review = store.findCampaign(started.id)!;
   assert.equal(review.status, "review");
   assert.equal(review.pieces.filter((piece) => piece.media === "video" && piece.videoUrl).length, 2);

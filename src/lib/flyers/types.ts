@@ -101,6 +101,8 @@ export interface FlyerJob {
   brief: string;
   format: FlyerFormat;
   model: string;
+  /** Diseños que pidió el usuario; si falta, el director eligió entre todos. */
+  templates?: string[];
   status: FlyerJobStatus;
   step: string;
   error?: string;

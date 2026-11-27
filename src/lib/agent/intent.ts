@@ -1,4 +1,6 @@
+import { FLYER_TEMPLATES } from "../flyers/templates";
 import type { FlyerFormat } from "../flyers/types";
+import { MAX_PER_DAY, readTimes } from "./slots";
 import { MOTION_STYLES, readStyleChoice, STYLE_IDS, type MotionStyleChoice } from "../motion/styles";
 import type { AgentAsk } from "./provider";
 
@@ -6,6 +8,27 @@ import type { AgentAsk } from "./provider";
 export const LIMITS = { pieces: 30, days: 14, perDay: 6 } as const;
 const FORMATS: readonly FlyerFormat[] = ["4:5", "1:1", "9:16"];
 const MAX_BRIEF = 1_500;
+
+/** Cómo se nombra cada diseño en una conversación. */
+export const TEMPLATE_NAMES: Record<string, string> = {
+  chat: "conversación de chat o WhatsApp",
+  planilla: "planilla de Excel desordenada",
+  red: "diagrama de áreas que se conectan",
+  ventana: "página web en una ventana del navegador",
+  afirmacion: "frase grande, solo tipografía",
+  comparativa: "antes y después, comparación",
+  pasos: "lista de pasos, señales o consejos",
+  oferta: "oferta, promoción o descuento con número",
+  foto: "con una foto",
+  objeto: "con un objeto grande recortado",
+};
+
+/** Ids de diseño válidos que pidió el usuario. */
+export function readTemplates(value: unknown): string[] {
+  const ids = new Set(FLYER_TEMPLATES.map((template) => template.id));
+  const list = Array.isArray(value) ? value : [];
+  return [...new Set(list.map((item) => String(item).trim().toLowerCase()).filter((id) => ids.has(id)))];
+}
 
 export interface BrandOption {
   id: string;
@@ -25,6 +48,10 @@ export interface CampaignRequest {
   format: FlyerFormat;
   /** Estilo de los videos (tempo y música). "auto" varía entre videos. */
   style: MotionStyleChoice;
+  /** Diseños de flyer pedidos; vacío = el director elige y varía. */
+  templates: string[];
+  /** Horarios pedidos ("HH:MM"), los mismos cada día; vacío = automáticos. */
+  times: string[];
 }
 
 export type Intent =
@@ -54,7 +81,7 @@ Acciones:
 - "question": falta un dato indispensable o el pedido no se entiende. Escribí la pregunta en "question", en español rioplatense, corta.
 
 Respondé solo con JSON:
-{"action":"campaign|status|help|question","brandId":"id de la lista o null","flyers":0,"videos":0,"days":1,"startDate":"AAAA-MM-DD o null","format":"4:5|1:1|9:16 o null","style":"auto|medida|${STYLE_IDS.join("|")}","brief":"qué quiere comunicar, con sus palabras; vacío si no dijo nada","question":"solo si action es question"}
+{"action":"campaign|status|help|question","brandId":"id de la lista o null","flyers":0,"videos":0,"days":1,"startDate":"AAAA-MM-DD o null","format":"4:5|1:1|9:16 o null","style":"auto|medida|${STYLE_IDS.join("|")}","templates":["ids de diseño, solo si los pide"],"times":["HH:MM, solo si pide horarios"],"brief":"qué quiere comunicar, con sus palabras; vacío si no dijo nada","question":"solo si action es question"}
 
 Conversación:
 - Puede venir la charla previa. Juntá TODO lo que el usuario ya dijo en ella: la marca, las cantidades, el tema, los días. Un mensaje corto ("dos flyers y dos videos", "sí", "Obsidiana", "el lunes") casi siempre responde la última pregunta del agente y completa el pedido anterior.
@@ -71,6 +98,10 @@ Reglas:
 ${STYLE_IDS.map((id) => `  - ${id}: ${MOTION_STYLES[id].label}, ${MOTION_STYLES[id].description.toLowerCase()} (${MOTION_STYLES[id].bpm} BPM)`).join("\n")}
   - medida: Claude diseña cada video desde cero (más original, tarda unos minutos y cuesta algo más). Solo si pide videos "a medida", "originales", "únicos", "creativos" o "distintos".
   "electrónico", "con energía", "movido" → energetico; "calmo", "lento", "lo-fi", "relajado" → tranquilo; "serio", "profesional", "institucional" → corporativo.
+- templates: solo si pide un tipo de diseño para los flyers. Si no lo pide, lista vacía (el sistema varía solo). Diseños (id: cómo lo puede nombrar):
+${FLYER_TEMPLATES.map((template) => `  - ${template.id}: ${TEMPLATE_NAMES[template.id] ?? template.purpose}`).join("\n")}
+  Ejemplos: "tipo chat" → ["chat"]; "con fotos" → ["foto"]; "tipo Excel y tipo web" → ["planilla","ventana"].
+- times: solo si pide horarios, en 24 h. "a las 10 y a las 6 de la tarde" → ["10:00","18:00"]; "a las 20.30" → ["20:30"]; "a la mañana" → ["10:00"]; "al mediodía" → ["12:00"]; "a la noche" → ["20:00"]. Son los mismos todos los días. Si no lo pide, lista vacía.
 - brief: el objetivo o tema que contó en cualquier momento de la charla (por ejemplo "impulsar el registro en la plataforma"), con sus palabras.
 - No inventes cantidades.`;
 }
@@ -121,14 +152,31 @@ export function normalizeIntent(raw: string, brands: BrandOption[], now = new Da
   if (!images && !videos) return { kind: "question", text: "¿Cuántos flyers y cuántos videos querés?" };
   if (images + videos > LIMITS.pieces)
     return { kind: "question", text: `Puedo armar hasta ${LIMITS.pieces} piezas por pedido. ¿Lo dividimos?` };
-  const days = Math.min(LIMITS.days, Math.max(1, count(data.days) || 1));
-  if (Math.ceil((images + videos) / days) > LIMITS.perDay)
+  const times = readTimes(data.times);
+  // Con horarios fijos, cada día entran tantas piezas como horarios: los días se estiran si hace falta.
+  const asked = Math.max(1, count(data.days) || 1);
+  const needed = times.length ? Math.ceil((images + videos) / times.length) : asked;
+  const days = Math.max(asked, needed);
+  if (days > LIMITS.days)
+    return { kind: "question", text: `Con ${times.length} horario${times.length === 1 ? "" : "s"} por día serían ${days} días; el máximo es ${LIMITS.days}. ¿Sumamos horarios o pedimos menos piezas?` };
+  if (!times.length && Math.ceil((images + videos) / days) > Math.min(LIMITS.perDay, MAX_PER_DAY))
     return { kind: "question", text: `Serían más de ${LIMITS.perDay} publicaciones por día. ¿Lo repartimos en más días?` };
   const format = FORMATS.includes(data.format as FlyerFormat) ? (data.format as FlyerFormat) : "4:5";
   const brief = typeof data.brief === "string" ? data.brief.trim().slice(0, MAX_BRIEF) : "";
   return {
     kind: "campaign",
-    request: { brandId: brand.id, images, videos, days, startDate: readDate(data.startDate, now), brief, format, style: readStyleChoice(data.style) },
+    request: {
+      brandId: brand.id,
+      images,
+      videos,
+      days,
+      startDate: readDate(data.startDate, now),
+      brief,
+      format,
+      style: readStyleChoice(data.style),
+      templates: readTemplates(data.templates),
+      times,
+    },
   };
 }
 

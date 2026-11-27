@@ -200,7 +200,7 @@ async function runJob(job: FlyerJob, brand: FlyerBrand, engine: FlyerEngine): Pr
       // Para variar: los sistemas del último pedido con resultados.
       templates: previous.find((item) => item.flyers.length)?.flyers.map((flyer) => flyer.concept.template) || [],
     };
-    const concepts = await createConcepts(brand, job.brief, engine.ask, history);
+    const concepts = await createConcepts(brand, job.brief, engine.ask, history, job.templates);
     const flyers: Flyer[] = concepts.map((concept) => ({
       id: randomUUID(),
       concept,
@@ -231,6 +231,8 @@ export interface StartFlyerJob {
   brief: string;
   format: FlyerFormat;
   model: string;
+  /** Diseños permitidos; vacío o ausente = el director elige entre todos. */
+  templates?: string[];
 }
 
 /** Crea el trabajo y lo ejecuta en segundo plano. */
@@ -242,6 +244,7 @@ export async function startFlyerJob(input: StartFlyerJob, engine = createEngine(
     brief: input.brief,
     format: input.format,
     model: input.model,
+    ...(input.templates?.length ? { templates: input.templates } : {}),
     status: "running",
     step: "Pensando conceptos",
     createdAt: new Date().toISOString(),

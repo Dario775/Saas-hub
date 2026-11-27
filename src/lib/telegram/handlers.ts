@@ -6,7 +6,7 @@ import {
   type CampaignDeps,
 } from "../agent/campaign";
 import { forget, history, remember, transcript } from "../agent/conversation";
-import { readIntent, type BrandOption, type CampaignRequest } from "../agent/intent";
+import { readIntent, TEMPLATE_NAMES, type BrandOption, type CampaignRequest } from "../agent/intent";
 import type { AgentAsk } from "../agent/provider";
 import { formatSlot, planSlots } from "../agent/slots";
 import { readCampaigns } from "../agent/store";
@@ -51,7 +51,9 @@ function describeRequest(request: CampaignRequest, brandName: string): string {
   const first = planSlots(request)[0];
   const start = first ? `, desde ${formatSlot(first.at).replace(/ \d\d:\d\d$/, "")}` : "";
   const style = request.videos && request.style !== "auto" ? `, videos ${request.style === CUSTOM_STYLE ? "diseñados a medida por Claude" : `en estilo ${styleLabel(request.style).toLowerCase()}`}` : "";
-  return `Voy a crear ${parts} para ${brandName} (formato ${request.format}${style}), repartidos en ${request.days} día${request.days === 1 ? "" : "s"}${start}. Tarda unos minutos: te aviso cuando estén para que los revises.`;
+  const designs = request.templates?.length ? `, flyers ${request.templates.map((id) => `tipo «${TEMPLATE_NAMES[id] ?? id}»`).join(" y ")}` : "";
+  const hours = request.times?.length ? `, a las ${request.times.join(" y ")}` : "";
+  return `Voy a crear ${parts} para ${brandName} (formato ${request.format}${style}${designs}${hours}), repartidos en ${request.days} día${request.days === 1 ? "" : "s"}${start}. Tarda unos minutos: te aviso cuando estén para que los revises.`;
 }
 
 /** Responde y lo anota en la charla, para que el próximo mensaje tenga contexto. */

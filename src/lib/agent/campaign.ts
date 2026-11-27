@@ -81,7 +81,13 @@ async function produceFlyers(campaign: Campaign, brand: FlyerBrand, deps: Campai
   for (let batch = 0; found.length < needed && batch < maxBatches; batch++) {
     await step(campaign.id, `Creando flyers (${found.length} de ${needed})`);
     const { job, done } = await whenFree(deps, () =>
-      deps.startJob({ brand, brief: brief(campaign.request, brand, batch), format: campaign.request.format, model: deps.flyerModel }),
+      deps.startJob({
+        brand,
+        brief: brief(campaign.request, brand, batch),
+        format: campaign.request.format,
+        model: deps.flyerModel,
+        templates: campaign.request.templates,
+      }),
     );
     await done;
     const finished = deps.readJobs().find((item) => item.id === job.id);
