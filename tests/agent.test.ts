@@ -166,7 +166,7 @@ let postCounter = 0;
 function fakeDeps() {
   const jobs: FlyerJob[] = [];
   const said: string[] = [];
-  const scheduled: Array<{ media: string; at: string; caption: string }> = [];
+  const scheduled: Array<{ media: string; at: string; caption: string; source?: string }> = [];
   let previews = 0;
   let approvals = 0;
   let counter = 0;
@@ -193,8 +193,8 @@ function fakeDeps() {
       target.video = { status: "done", seconds: 12, music: true, url: `/generated-videos/${target.id}.mp4` };
       return { job, done: Promise.resolve() };
     },
-    schedule: async (input: { image?: Buffer | null; videoPath?: string | null; scheduledAt: unknown; message: string }) => {
-      scheduled.push({ media: input.videoPath ? "video" : input.image ? "image" : "text", at: String(input.scheduledAt), caption: input.message });
+    schedule: async (input: { image?: Buffer | null; videoPath?: string | null; scheduledAt: unknown; message: string; source?: { media: string } | null }) => {
+      scheduled.push({ media: input.videoPath ? "video" : input.image ? "image" : "text", at: String(input.scheduledAt), caption: input.message, source: input.source?.media });
       return { id: `sched_${++postCounter}`, status: "scheduled", scheduledAt: String(input.scheduledAt) } as ScheduledPost;
     },
     readImage: () => Buffer.from("png"),
@@ -234,6 +234,7 @@ test("una campaña crea, anima, pide aprobación y recién ahí programa", async
   await campaign.scheduleCampaign(started.id, fake.deps as never);
   assert.equal(fake.scheduled.length, 6);
   assert.equal(fake.scheduled.filter((item) => item.media === "video").length, 2);
+  assert.ok(fake.scheduled.every((item) => item.source === item.media), "cada publicación sabe de qué flyer y formato sale");
   assert.ok(fake.scheduled.every((item) => Date.parse(item.at) > NOW.getTime()));
   assert.equal(store.findCampaign(started.id)!.status, "scheduled");
   assert.match(fake.said.at(-1)!, /Programé 6 de 6/);

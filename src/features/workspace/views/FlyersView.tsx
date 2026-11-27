@@ -39,7 +39,7 @@ function messageOf(error: unknown): string {
 }
 
 export default function FlyersView({ controller }: { controller: WorkspaceController }) {
-  const { pageId, currentBrand, setGeneratedImage, setGeneratedVideo, setMessage, setTab, setComposerInitialDesign } = controller;
+  const { pageId, currentBrand, setGeneratedImage, setGeneratedVideo, setDraftSource, setMessage, setTab, setComposerInitialDesign } = controller;
   const brandId = pageId || currentBrand.id;
   const [brief, setBrief] = useState("");
   const [format, setFormat] = useState<FlyerFormat>("4:5");
@@ -133,10 +133,11 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
     }
   }
 
-  async function handlePublish(flyer: Flyer, media: "image" | "video") {
+  async function handlePublish(job: FlyerJob, flyer: Flyer, media: "image" | "video") {
     if (media === "video" && flyer.video?.url) {
       setGeneratedImage(null);
       setGeneratedVideo(flyer.video.url);
+      setDraftSource({ jobId: job.id, flyerId: flyer.id, media: "video" });
       if (flyer.concept.caption) setMessage(flyer.concept.caption);
       setTab("publish");
       toast.success("Video enviado a Publicaciones para que lo revises");
@@ -154,6 +155,7 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
       });
       setGeneratedVideo(null);
       setGeneratedImage(image);
+      setDraftSource({ jobId: job.id, flyerId: flyer.id, media: "image" });
       if (flyer.concept.caption) setMessage(flyer.concept.caption);
       setTab("publish");
       toast.success("Flyer enviado a Publicaciones para que lo revises");
@@ -256,7 +258,7 @@ export default function FlyersView({ controller }: { controller: WorkspaceContro
                 revising={revisingId === flyer.id}
                 disabled={running || revisingId !== null}
                 onRevise={(instruction) => handleRevise(job, flyer, instruction)}
-                onPublish={(media) => void handlePublish(flyer, media)}
+                onPublish={(media) => void handlePublish(job, flyer, media)}
                 onAnimate={(seconds, music, style) => handleAnimate(job, flyer, seconds, music, style)}
                 onEdit={() => handleEdit(job, flyer)}
                 icons={{ download: <Download size={14} />, publish: <Send size={14} /> }}

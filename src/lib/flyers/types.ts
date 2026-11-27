@@ -60,6 +60,16 @@ export interface FlyerReview {
 
 export type FlyerVideoStatus = "running" | "done" | "failed";
 
+/** Una salida del flyer en redes, programada o hecha. */
+export interface FlyerPublication {
+  media: "image" | "video";
+  status: "scheduled" | "published" | "failed";
+  /** Fecha de publicación (o la programada si todavía no salió). */
+  at: string;
+  pageId: string;
+  permalink?: string;
+}
+
 /** Versión animada del flyer. */
 export interface FlyerVideo {
   status: FlyerVideoStatus;
@@ -91,6 +101,10 @@ export interface Flyer {
   revision: number;
   error?: string;
   video?: FlyerVideo;
+  /** Publicaciones hechas al instante desde el panel. Las programadas se leen del calendario. */
+  published?: Array<Omit<FlyerPublication, "status">>;
+  /** Calculado al listar: dónde salió o va a salir. No se guarda. */
+  publications?: FlyerPublication[];
 }
 
 export type FlyerJobStatus = "running" | "done" | "failed";

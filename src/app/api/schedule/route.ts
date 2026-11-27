@@ -1,6 +1,7 @@
 import { fbDeletePost } from "@/lib/facebook-native";
 import { getAllPages } from "@/lib/pages-server";
 import { decodeImage } from "@/lib/publish-validation";
+import { readSource } from "@/lib/flyers/publications";
 import { createScheduledPost } from "@/lib/schedule-service";
 import {
 mutateSchedule,
@@ -86,6 +87,7 @@ export async function POST(request: NextRequest) {
       image: body.image ? decodeImage(body.image) : null,
       videoPath: body.videoUrl || body.videoPath || null,
       platforms: body.platforms,
+      source: readSource(body.source),
     });
     return NextResponse.json(
       { success: post.status !== "failed", post, error: post.error },

@@ -43,6 +43,24 @@ export async function notifyOutcomes(posts: ScheduledPost[], notify: Notifier): 
   return sent;
 }
 
+/** Lo que ya salió en los últimos días, con su link, para responder "¿qué se publicó?". */
+export function publishedSummary(posts: ScheduledPost[], pageNames: Map<string, string>, now = new Date(), days = 7): string {
+  const since = now.getTime() - days * 86_400_000;
+  const done = posts
+    .filter((post) => post.status === "published")
+    .filter((post) => Date.parse(post.publishedAt || post.scheduledAt) >= since)
+    .sort((a, b) => Date.parse(b.publishedAt || b.scheduledAt) - Date.parse(a.publishedAt || a.scheduledAt));
+  const period = days === 1 ? "hoy" : `en los últimos ${days} días`;
+  if (!done.length) return `No salió nada ${period}.`;
+  const lines = done.slice(0, 25).map((post) => {
+    const kind = post.mediaType === "video" ? "video" : post.mediaType === "image" ? "imagen" : "texto";
+    const link = post.permalink ? `\n  ${post.permalink}` : "";
+    return `• ${formatSlot(new Date(post.publishedAt || post.scheduledAt))} — ${pageNames.get(post.pageId) || post.pageId} (${kind})${link}`;
+  });
+  const more = done.length > 25 ? `\n…y ${done.length - 25} más.` : "";
+  return `Publicado ${period} (${done.length}):\n${lines.join("\n")}${more}`;
+}
+
 /** Lo que sale en los próximos días, para responder "¿qué hay programado?". */
 export function upcomingSummary(posts: ScheduledPost[], pageNames: Map<string, string>, now = new Date(), days = 7): string {
   const until = now.getTime() + days * 86_400_000;

@@ -1,4 +1,7 @@
 import { loadFlyerBrand } from "@/lib/flyers/brand";
+import { logPublished, readSource } from "@/lib/flyers/publications";
+import { updateJob } from "@/lib/flyers/store";
+import { readDB } from "@/lib/scheduler";
 import { animateFlyer, readVideoSeconds } from "@/lib/flyers/motion";
 import { readStyleChoice } from "@/lib/motion/styles";
 import { exportFlyer, reviseFlyer, startFlyerJob, visibleJobs } from "@/lib/flyers/pipeline";
@@ -36,7 +39,7 @@ function readModel(value: unknown): string {
 export async function GET(request: NextRequest) {
   try {
     const brandId = request.nextUrl.searchParams.get("brand") || undefined;
-    return NextResponse.json({ success: true, jobs: visibleJobs(brandId).slice(0, 20) });
+    return NextResponse.json({ success: true, jobs: visibleJobs(brandId, readDB()).slice(0, 20) });
   } catch (error) {
     return fail(error, 500);
   }
@@ -49,6 +52,21 @@ export async function POST(request: NextRequest) {
     if (body.action === "export") {
       const design = await exportFlyer(String(body.jobId || ""), String(body.flyerId || ""), brand);
       return NextResponse.json({ success: true, design });
+    }
+    if (body.action === "published") {
+      // Publicado al instante desde el panel: se anota en el flyer para mostrarlo en su tarjeta.
+      const source = readSource({ jobId: body.jobId, flyerId: body.flyerId, media: body.media });
+      if (!source) throw new Error("Falta indicar qué flyer se publicó.");
+      const permalink = typeof body.permalink === "string" && /^https:\/\/(www\.)?facebook\.com\//.test(body.permalink) ? body.permalink : undefined;
+      await updateJob(source.jobId, (job) => ({
+        ...job,
+        flyers: job.flyers.map((flyer) =>
+          flyer.id === source.flyerId
+            ? logPublished(flyer, { media: source.media, pageId: String(body.pageId || brand.id).slice(0, 80), at: new Date().toISOString(), ...(permalink ? { permalink } : {}) })
+            : flyer,
+        ),
+      }));
+      return NextResponse.json({ success: true });
     }
     if (body.action === "animate") {
       const { job } = await animateFlyer({

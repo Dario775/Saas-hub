@@ -62,6 +62,8 @@ Cancelar una programación nativa primero solicita su cancelación remota. El an
 
 Programar desde la web y desde el agente pasa por la misma función, `createScheduledPost` (`src/lib/schedule-service.ts`).
 
+Cada publicación que sale de un flyer guarda su origen (`source`: trabajo, flyer e imagen o video). La tarjeta del flyer muestra si está programada, publicada (con el link) o falló: lo programado se lee del calendario, y lo publicado al instante desde el panel se anota en el flyer (`published`, acción `published` de `/api/flyers`; `src/lib/flyers/publications.ts`). El bot responde «¿qué se publicó esta semana?» con lo que salió del calendario y sus links.
+
 ## Agente por Telegram
 
 Un bot de Telegram recibe pedidos en texto o audio ("10 flyers y 5 videos para Obsidiana en 3 días"), crea las piezas con el módulo de flyers, las muestra y, cuando el usuario aprueba, las programa en Facebook. Después avisa cuando sale o falla cada publicación.

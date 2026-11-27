@@ -223,6 +223,7 @@ export async function scheduleCampaign(id: string, deps: CampaignDeps): Promise<
         image: piece.media === "image" ? deps.readImage(piece.flyerId) : null,
         videoPath: piece.media === "video" ? piece.videoUrl : null,
         platforms: ["facebook"],
+        source: { jobId: piece.jobId, flyerId: piece.flyerId, media: piece.media },
       });
       pieces.push({ ...piece, postId: post.id, scheduledAt: post.scheduledAt });
       if (post.status === "failed") errors.push(`${formatSlot(slot.at)}: ${post.error}`);

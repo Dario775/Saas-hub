@@ -34,6 +34,8 @@ export function useWorkspace() {
     generatedVideo,
     setGeneratedImage,
     setGeneratedVideo,
+    draftSource,
+    setDraftSource,
   } = usePublishDraft(pageId);
   const [loading, setLoading] = useState(false);
 
@@ -647,6 +649,7 @@ export function useWorkspace() {
         image: generatedImage || undefined,
         videoUrl: generatedVideo || undefined,
         platforms: selectedPlatforms,
+        source: draftSource || undefined,
       };
       const resp = await fetch("/api/schedule", {
         method: "POST",
@@ -1494,6 +1497,19 @@ export function useWorkspace() {
     }
   }
 
+  /** Anota en el flyer que salió, para que su tarjeta lo muestre. Si falla, la publicación igual salió. */
+  async function logFlyerPublished(source: NonNullable<typeof draftSource>, result: { permalink?: string }) {
+    try {
+      await fetch("/api/flyers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "published", brandId: pageId, pageId, ...source, permalink: result.permalink }),
+      });
+    } catch {
+      /* El registro es informativo: no interrumpe la publicación. */
+    }
+  }
+
   async function handlePublish() {
     if (!pageId) {
       toast.error("Elegí una página primero");
@@ -1560,6 +1576,7 @@ export function useWorkspace() {
         },
         ...h,
       ]);
+      if (draftSource) void logFlyerPublished(draftSource, data);
       setMessage("");
       setGeneratedImage(null);
       setGeneratedVideo(null);
@@ -1719,6 +1736,7 @@ export function useWorkspace() {
     setImageNegative,
     generatedImage,
     setGeneratedImage,
+    setDraftSource,
     composerInitialImage,
     setComposerInitialImage,
     composerInitialCopy,

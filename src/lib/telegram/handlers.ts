@@ -11,7 +11,7 @@ import type { AgentAsk } from "../agent/provider";
 import { formatSlot, planSlots } from "../agent/slots";
 import { readCampaigns } from "../agent/store";
 import { MAX_AUDIO_SECONDS } from "../agent/transcribe";
-import { upcomingSummary } from "../agent/watch";
+import { publishedSummary, upcomingSummary } from "../agent/watch";
 import { CUSTOM_STYLE, styleLabel } from "../motion/styles";
 import type { ScheduledPost } from "../schedule-types";
 import type { TelegramApi, TelegramCallback, TelegramMessage } from "./api";
@@ -37,7 +37,7 @@ function helpText(context: BrandOption[], modelLabel: string): string {
     "«Creá 10 flyers y 5 videos para Obsidiana, repartidos en 3 días desde el lunes».",
     "",
     "Armo todo, te muestro cómo quedó y lo programo en Facebook cuando apruebes. Después te aviso cuando sale cada publicación.",
-    "También podés preguntarme «¿qué hay programado?».",
+    "También podés preguntarme «¿qué hay programado?» o «¿qué se publicó esta semana?».",
     "",
     `Marcas: ${context.map((brand) => brand.name).join(", ")}.`,
     `Pienso con ${modelLabel}.`,
@@ -69,6 +69,8 @@ async function handleText(context: BotContext, chatId: number, text: string): Pr
   remember(chatId, "user", text);
   if (intent.kind === "help") return reply(context, chatId, helpText(brands, context.modelLabel), "(Explicó qué puede hacer y pidió el pedido.)");
   if (intent.kind === "question") return reply(context, chatId, intent.text);
+  if (intent.kind === "published")
+    return reply(context, chatId, publishedSummary(context.posts(), context.pageNames(), new Date(), intent.days), "(Mostró lo publicado.)");
   if (intent.kind === "status") {
     const running = readCampaigns().find((campaign) => campaign.status === "generating" || campaign.status === "scheduling");
     const current = running ? `En curso: ${running.step}.\n\n` : "";

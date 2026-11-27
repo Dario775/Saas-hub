@@ -6,7 +6,7 @@ import {
 import { resolvePublicMedia } from "@/lib/media-path";
 import { getAllPages } from "@/lib/pages-server";
 import { validatePlatforms, validateScheduleDate } from "@/lib/publish-validation";
-import type { ScheduledPost } from "@/lib/schedule-types";
+import type { PostSource, ScheduledPost } from "@/lib/schedule-types";
 import { mutateSchedule } from "@/lib/scheduler";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +21,8 @@ export interface NewScheduledPost {
   /** Ruta pública de un video ya generado (/generated-videos/...). */
   videoPath?: string | null;
   platforms?: unknown;
+  /** Flyer del que sale, si sale de uno. */
+  source?: PostSource | null;
 }
 
 function readMessage(value: string): string {
@@ -95,6 +97,7 @@ export async function createScheduledPost(input: NewScheduledPost): Promise<Sche
     postId: null,
     error: null,
     platforms,
+    ...(input.source ? { source: input.source } : {}),
   };
   await mutateSchedule((posts) => {
     posts.push(post);

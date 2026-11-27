@@ -57,6 +57,7 @@ export interface CampaignRequest {
 export type Intent =
   | { kind: "campaign"; request: CampaignRequest }
   | { kind: "status" }
+  | { kind: "published"; days: number }
   | { kind: "help" }
   | { kind: "question"; text: string };
 
@@ -77,11 +78,12 @@ ${brands.map((brand) => `- ${brand.id}: ${brand.name}`).join("\n")}
 Acciones:
 - "campaign": crear piezas y programarlas en Facebook. "flyers" son publicaciones con imagen y "videos" publicaciones con video; son piezas distintas (10 flyers y 5 videos = 15 publicaciones).
 - "status": quiere saber qué hay programado o cómo va algo.
+- "published": quiere saber qué YA se publicó ("¿qué salió?", "¿qué se publicó esta semana?"). En "days", cuántos días hacia atrás (hoy = 1, esta semana = 7, este mes = 30; si no dice, 7).
 - "help": saluda o pregunta qué podés hacer.
 - "question": falta un dato indispensable o el pedido no se entiende. Escribí la pregunta en "question", en español rioplatense, corta.
 
 Respondé solo con JSON:
-{"action":"campaign|status|help|question","brandId":"id de la lista o null","flyers":0,"videos":0,"days":1,"startDate":"AAAA-MM-DD o null","format":"4:5|1:1|9:16 o null","style":"auto|medida|${STYLE_IDS.join("|")}","templates":["ids de diseño, solo si los pide"],"times":["HH:MM, solo si pide horarios"],"brief":"qué quiere comunicar, con sus palabras; vacío si no dijo nada","question":"solo si action es question"}
+{"action":"campaign|status|published|help|question","brandId":"id de la lista o null","flyers":0,"videos":0,"days":1,"startDate":"AAAA-MM-DD o null","format":"4:5|1:1|9:16 o null","style":"auto|medida|${STYLE_IDS.join("|")}","templates":["ids de diseño, solo si los pide"],"times":["HH:MM, solo si pide horarios"],"brief":"qué quiere comunicar, con sus palabras; vacío si no dijo nada","question":"solo si action es question"}
 
 Conversación:
 - Puede venir la charla previa. Juntá TODO lo que el usuario ya dijo en ella: la marca, las cantidades, el tema, los días. Un mensaje corto ("dos flyers y dos videos", "sí", "Obsidiana", "el lunes") casi siempre responde la última pregunta del agente y completa el pedido anterior.
@@ -140,6 +142,7 @@ function findBrand(value: unknown, brands: BrandOption[]): BrandOption | undefin
 export function normalizeIntent(raw: string, brands: BrandOption[], now = new Date()): Intent {
   const data = parse(raw);
   if (data.action === "status") return { kind: "status" };
+  if (data.action === "published") return { kind: "published", days: Math.min(60, Math.max(1, count(data.days) || 7)) };
   if (data.action === "help") return { kind: "help" };
   if (data.action !== "campaign") {
     const text = typeof data.question === "string" && data.question.trim() ? data.question.trim() : "";

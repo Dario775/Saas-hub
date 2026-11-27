@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { ScheduledPost } from "../schedule-types";
+import { withPublications } from "./publications";
 import { pathToFileURL } from "node:url";
 import { comfyGenerate, comfyHealth } from "../comfy-client";
 import { GENERATORS } from "../generators";
@@ -275,10 +277,11 @@ export async function reviseFlyer(jobId: string, flyerId: string, instruction: s
 }
 
 /** Un trabajo que quedó "en curso" tras reiniciar el panel ya no está corriendo. */
-export function visibleJobs(brandId?: string): FlyerJob[] {
+export function visibleJobs(brandId?: string, posts: readonly ScheduledPost[] = []): FlyerJob[] {
   return readJobs()
     .filter((job) => !brandId || job.brandId === brandId)
     .map(settleVideos)
+    .map((job) => withPublications(job, posts))
     .map((job) =>
       job.status === "running" && !worker.saasFlyerBusy
         ? { ...job, status: job.flyers.some((flyer) => flyer.revision > 0) ? ("done" as const) : ("failed" as const), step: "", error: job.error || "Se interrumpió la preparación." }
