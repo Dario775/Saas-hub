@@ -174,6 +174,27 @@ test("si nada es válido, lo dice", async () => {
   await assert.rejects(createConcepts(BRAND, "pedido", async () => '{"concepts":[]}'), /no logró proponer conceptos/);
 });
 
+test("si el cliente pide un diseño, el director usa solo ese y puede repetirlo", async () => {
+  const prompt = buildDirectorPrompt(BRAND, ["chat"]);
+  assert.match(prompt, /el cliente pidió solo estos/);
+  assert.doesNotMatch(prompt, /- planilla:/);
+  assert.match(prompt, /podés repetir sistema \(hasta 4 veces cada uno\)/);
+  const chat = FLYER_SAMPLES.find((sample) => sample.template === "chat")!;
+  const planilla = FLYER_SAMPLES.find((sample) => sample.template === "planilla")!;
+  const answers = [
+    JSON.stringify({ concepts: [chat, chat, planilla] }),
+    JSON.stringify({ concepts: [chat, chat] }),
+  ];
+  const prompts: string[] = [];
+  const concepts = await createConcepts(BRAND, "pedido", async (_system, user) => {
+    prompts.push(user);
+    return answers.shift()!;
+  }, undefined, ["chat"]);
+  assert.equal(concepts.length, 4);
+  assert.ok(concepts.every((concept) => concept.template === "chat"));
+  assert.match(prompts[1], /planilla: no está entre los sistemas pedidos/);
+});
+
 test("un ajuste inválido no rompe el flyer", () => {
   const concept = FLYER_SAMPLES.find((item) => item.template === "red")!;
   assert.equal(applyChanges(concept, { slots: { titular: "x".repeat(200) } }), null);

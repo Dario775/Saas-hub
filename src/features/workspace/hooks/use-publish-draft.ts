@@ -1,7 +1,9 @@
 "use client";
 import { useEffect,useState,type SetStateAction } from "react";
 
-type Media = { image: string | null; video: string | null };
+import type { PostSource } from "@/lib/schedule-types";
+
+type Media = { image: string | null; video: string | null; source?: PostSource | null };
 const STORAGE_KEY = "saashub-publish-drafts";
 
 /** Keep each brand's pending publication separate, including late generation results. */
@@ -50,6 +52,8 @@ export function usePublishDraft(brandId: string) {
       [brandId]: {
         image,
         video: image ? null : previous[brandId]?.video || null,
+        // Una imagen nueva ya no es la del flyer anterior.
+        source: null,
       },
     }));
   }
@@ -59,11 +63,21 @@ export function usePublishDraft(brandId: string) {
       [brandId]: {
         video,
         image: video ? null : previous[brandId]?.image || null,
+        source: null,
       },
+    }));
+  }
+  /** Marca de qué flyer sale lo que está en el borrador. Llamar después de poner la imagen o el video. */
+  function setDraftSource(source: PostSource | null) {
+    setMedia((previous) => ({
+      ...previous,
+      [brandId]: { image: previous[brandId]?.image || null, video: previous[brandId]?.video || null, source },
     }));
   }
   return {
     message: messages[brandId] || "",
+    draftSource: media[brandId]?.source || null,
+    setDraftSource,
     setMessage,
     generatedImage: media[brandId]?.image || null,
     generatedVideo: media[brandId]?.video || null,

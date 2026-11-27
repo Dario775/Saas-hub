@@ -3,6 +3,8 @@
 import type { Flyer, FlyerFormat } from "@/lib/flyers/types";
 import { Layers3, Loader2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import type { MotionStyleChoice } from "@/lib/motion/styles";
+import { FlyerPublications } from "./FlyerPublications";
 import { FlyerVideoControls } from "./FlyerVideoControls";
 
 interface FlyerCardProps {
@@ -13,7 +15,7 @@ interface FlyerCardProps {
   onRevise: (instruction: string) => Promise<boolean>;
   onPublish: (media: "image" | "video") => void;
   /** Arma la versión animada del flyer. */
-  onAnimate: (seconds: number, music: boolean) => Promise<void>;
+  onAnimate: (seconds: number, music: boolean, style: MotionStyleChoice) => Promise<void>;
   /** Abre el flyer en el editor de diseño, con los textos como capas. */
   onEdit: () => Promise<void>;
   icons: { download: ReactNode; publish: ReactNode };
@@ -119,6 +121,7 @@ export function FlyerCard({ flyer, pending, revising, disabled, onRevise, onPubl
               {opening ? <Loader2 size={14} className="animate-spin" /> : <Layers3 size={14} />}
               {opening ? "Separando capas…" : "Editar en el editor de diseño"}
             </button>
+            <FlyerPublications publications={flyer.publications} />
             <FlyerVideoControls video={flyer.video} disabled={revising} onAnimate={onAnimate} />
             <div className="flex gap-2">
               <a

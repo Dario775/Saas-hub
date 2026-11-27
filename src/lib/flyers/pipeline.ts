@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { ScheduledPost } from "../schedule-types";
+import { withPublications } from "./publications";
 import { pathToFileURL } from "node:url";
 import { comfyGenerate, comfyHealth } from "../comfy-client";
 import { GENERATORS } from "../generators";
@@ -200,7 +202,7 @@ async function runJob(job: FlyerJob, brand: FlyerBrand, engine: FlyerEngine): Pr
       // Para variar: los sistemas del último pedido con resultados.
       templates: previous.find((item) => item.flyers.length)?.flyers.map((flyer) => flyer.concept.template) || [],
     };
-    const concepts = await createConcepts(brand, job.brief, engine.ask, history);
+    const concepts = await createConcepts(brand, job.brief, engine.ask, history, job.templates);
     const flyers: Flyer[] = concepts.map((concept) => ({
       id: randomUUID(),
       concept,
@@ -231,6 +233,8 @@ export interface StartFlyerJob {
   brief: string;
   format: FlyerFormat;
   model: string;
+  /** Diseños permitidos; vacío o ausente = el director elige entre todos. */
+  templates?: string[];
 }
 
 /** Crea el trabajo y lo ejecuta en segundo plano. */
@@ -242,6 +246,7 @@ export async function startFlyerJob(input: StartFlyerJob, engine = createEngine(
     brief: input.brief,
     format: input.format,
     model: input.model,
+    ...(input.templates?.length ? { templates: input.templates } : {}),
     status: "running",
     step: "Pensando conceptos",
     createdAt: new Date().toISOString(),
@@ -272,10 +277,11 @@ export async function reviseFlyer(jobId: string, flyerId: string, instruction: s
 }
 
 /** Un trabajo que quedó "en curso" tras reiniciar el panel ya no está corriendo. */
-export function visibleJobs(brandId?: string): FlyerJob[] {
+export function visibleJobs(brandId?: string, posts: readonly ScheduledPost[] = []): FlyerJob[] {
   return readJobs()
     .filter((job) => !brandId || job.brandId === brandId)
     .map(settleVideos)
+    .map((job) => withPublications(job, posts))
     .map((job) =>
       job.status === "running" && !worker.saasFlyerBusy
         ? { ...job, status: job.flyers.some((flyer) => flyer.revision > 0) ? ("done" as const) : ("failed" as const), step: "", error: job.error || "Se interrumpió la preparación." }

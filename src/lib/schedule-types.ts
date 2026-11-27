@@ -6,6 +6,13 @@ export interface PlatformResult {
   publishedAt?: string | null;
 }
 
+/** De qué flyer sale una publicación, para mostrar su estado en la tarjeta. */
+export interface PostSource {
+  jobId: string;
+  flyerId: string;
+  media: "image" | "video";
+}
+
 export interface ScheduledPost {
   id: string;
   pageId: string;
@@ -24,5 +31,6 @@ export interface ScheduledPost {
   platforms?: string[];
   platformResults?: Record<string, PlatformResult>;
   processingAt?: string;
+  source?: PostSource;
 }
 

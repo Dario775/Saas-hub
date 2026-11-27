@@ -1,3 +1,4 @@
+import type { MotionStyle } from "../motion/styles";
 export type FlyerTone = "claro" | "oscuro" | "acento";
 export const FLYER_TONES: readonly FlyerTone[] = ["claro", "oscuro", "acento"];
 
@@ -59,6 +60,16 @@ export interface FlyerReview {
 
 export type FlyerVideoStatus = "running" | "done" | "failed";
 
+/** Una salida del flyer en redes, programada o hecha. */
+export interface FlyerPublication {
+  media: "image" | "video";
+  status: "scheduled" | "published" | "failed";
+  /** Fecha de publicación (o la programada si todavía no salió). */
+  at: string;
+  pageId: string;
+  permalink?: string;
+}
+
 /** Versión animada del flyer. */
 export interface FlyerVideo {
   status: FlyerVideoStatus;
@@ -67,6 +78,14 @@ export interface FlyerVideo {
   music: boolean;
   /** Si usó una pista de la carpeta de música. */
   track?: boolean;
+  /** Estilo con el que se armó (tempo y música). */
+  style?: MotionStyle;
+  /** Lo diseñó Claude desde cero ("a medida"). */
+  custom?: boolean;
+  /** Idea visual que eligió Claude. */
+  concept?: string;
+  /** Paso en curso mientras se arma. */
+  step?: string;
   /** Ruta pública del MP4, lista para mostrar y publicar. */
   url?: string;
   error?: string;
@@ -82,6 +101,10 @@ export interface Flyer {
   revision: number;
   error?: string;
   video?: FlyerVideo;
+  /** Publicaciones hechas al instante desde el panel. Las programadas se leen del calendario. */
+  published?: Array<Omit<FlyerPublication, "status">>;
+  /** Calculado al listar: dónde salió o va a salir. No se guarda. */
+  publications?: FlyerPublication[];
 }
 
 export type FlyerJobStatus = "running" | "done" | "failed";
@@ -92,6 +115,8 @@ export interface FlyerJob {
   brief: string;
   format: FlyerFormat;
   model: string;
+  /** Diseños que pidió el usuario; si falta, el director eligió entre todos. */
+  templates?: string[];
   status: FlyerJobStatus;
   step: string;
   error?: string;

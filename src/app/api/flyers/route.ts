@@ -1,10 +1,12 @@
-import type { BrandConfig } from "@/features/workspace/config";
+import { loadFlyerBrand } from "@/lib/flyers/brand";
+import { logPublished, readSource } from "@/lib/flyers/publications";
+import { updateJob } from "@/lib/flyers/store";
+import { readDB } from "@/lib/scheduler";
 import { animateFlyer, readVideoSeconds } from "@/lib/flyers/motion";
+import { readStyleChoice } from "@/lib/motion/styles";
 import { exportFlyer, reviseFlyer, startFlyerJob, visibleJobs } from "@/lib/flyers/pipeline";
-import { FLYER_SIZES, type FlyerBrand, type FlyerFormat } from "@/lib/flyers/types";
-import { readJson } from "@/lib/json-store";
+import { FLYER_SIZES, type FlyerFormat } from "@/lib/flyers/types";
 import { NextRequest, NextResponse } from "next/server";
-import path from "node:path";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,24 +22,7 @@ function fail(error: unknown, status = 400) {
   );
 }
 
-function loadBrand(id: unknown): FlyerBrand {
-  const brands = readJson<BrandConfig[]>(path.join(process.cwd(), "brands.json"), []);
-  const brand = brands.find((item) => item.id === id);
-  if (!brand) throw new Error("Completá y guardá la identidad de esta marca antes de crear flyers.");
-  return {
-    id: brand.id,
-    name: brand.name,
-    website: brand.websiteUrl || "",
-    description: brand.projectDescription || "",
-    audience: brand.targetAudience || "",
-    valueProposition: brand.valueProposition || "",
-    voice: brand.voiceTone || "",
-    primary: brand.colors.primary[0] || "",
-    accent: brand.colors.secondary?.[0] || brand.colors.primary[1] || brand.colors.primary[0] || "",
-    headingFont: brand.typography?.heading || "",
-    logoDataUrl: brand.logoDataUrl,
-  };
-}
+const loadBrand = loadFlyerBrand;
 
 function readText(value: unknown, max: number, missing: string): string {
   const clean = typeof value === "string" ? value.trim() : "";
@@ -54,7 +39,7 @@ function readModel(value: unknown): string {
 export async function GET(request: NextRequest) {
   try {
     const brandId = request.nextUrl.searchParams.get("brand") || undefined;
-    return NextResponse.json({ success: true, jobs: visibleJobs(brandId).slice(0, 20) });
+    return NextResponse.json({ success: true, jobs: visibleJobs(brandId, readDB()).slice(0, 20) });
   } catch (error) {
     return fail(error, 500);
   }
@@ -68,6 +53,21 @@ export async function POST(request: NextRequest) {
       const design = await exportFlyer(String(body.jobId || ""), String(body.flyerId || ""), brand);
       return NextResponse.json({ success: true, design });
     }
+    if (body.action === "published") {
+      // Publicado al instante desde el panel: se anota en el flyer para mostrarlo en su tarjeta.
+      const source = readSource({ jobId: body.jobId, flyerId: body.flyerId, media: body.media });
+      if (!source) throw new Error("Falta indicar qué flyer se publicó.");
+      const permalink = typeof body.permalink === "string" && /^https:\/\/(www\.)?facebook\.com\//.test(body.permalink) ? body.permalink : undefined;
+      await updateJob(source.jobId, (job) => ({
+        ...job,
+        flyers: job.flyers.map((flyer) =>
+          flyer.id === source.flyerId
+            ? logPublished(flyer, { media: source.media, pageId: String(body.pageId || brand.id).slice(0, 80), at: new Date().toISOString(), ...(permalink ? { permalink } : {}) })
+            : flyer,
+        ),
+      }));
+      return NextResponse.json({ success: true });
+    }
     if (body.action === "animate") {
       const { job } = await animateFlyer({
         jobId: String(body.jobId || ""),
@@ -75,6 +75,7 @@ export async function POST(request: NextRequest) {
         brand,
         seconds: readVideoSeconds(body.seconds),
         music: body.music !== false,
+        style: readStyleChoice(body.style),
       });
       return NextResponse.json({ success: true, job }, { status: 202 });
     }

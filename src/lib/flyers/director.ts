@@ -21,9 +21,12 @@ export function createAsk(model: string): { ask: Ask; canSee: boolean } {
       ask: (system, user, image) =>
         queryClaude({ model, system, user, image, expectJson: true, timeoutMs: image ? REVIEW_TIMEOUT_MS : DIRECTOR_TIMEOUT_MS }),
     };
+  // "ollama:modelo" fuerza el modelo local, sin importar la IA activa del panel.
+  const local = /^ollama:(.+)$/.exec(model);
+  const settings = local ? { provider: "ollama" as const, ollamaModel: local[1] } : undefined;
   return {
     canSee: false,
-    ask: (system, user) => queryLLM(system, user, undefined, true, { timeoutMs: DIRECTOR_TIMEOUT_MS }),
+    ask: (system, user) => queryLLM(system, user, settings, true, { timeoutMs: DIRECTOR_TIMEOUT_MS }),
   };
 }
 
@@ -60,7 +63,21 @@ PROHIBIDO
 - Personas posando, ejecutivos, apretones de manos, robots, cerebros, hologramas, salas de servidores.
 - Emojis y signos de exclamación dentro del flyer.`;
 
-export function buildDirectorPrompt(brand: FlyerBrand): string {
+/** Diseños que se pueden usar: todos, o solo los que pidió el usuario. */
+function allowedTemplates(only?: readonly string[]): FlyerTemplate[] {
+  const chosen = only?.length ? FLYER_TEMPLATES.filter((template) => only.includes(template.id)) : [];
+  return chosen.length ? chosen : [...FLYER_TEMPLATES];
+}
+
+/** Cuántas veces puede repetirse un diseño: si pidieron menos de los que entran en una tanda. */
+function maxPerTemplate(allowed: readonly FlyerTemplate[]): number {
+  return Math.ceil(CONCEPT_COUNT / allowed.length);
+}
+
+export function buildDirectorPrompt(brand: FlyerBrand, only?: readonly string[]): string {
+  const allowed = allowedTemplates(only);
+  const repeat = maxPerTemplate(allowed) > 1;
+  const restricted = allowed.length < FLYER_TEMPLATES.length;
   return `Sos director creativo de una agencia premiada en Buenos Aires. Pensás conceptos de flyers y elegís el sistema de diseño que mejor cuenta cada idea. No diseñás: completás los textos de un sistema ya diseñado.
 
 MARCA
@@ -72,12 +89,12 @@ MARCA
 
 ${CRAFT_RULES}
 
-SISTEMAS DE DISEÑO DISPONIBLES
-${FLYER_TEMPLATES.map(describeTemplate).join("\n")}
+SISTEMAS DE DISEÑO DISPONIBLES${restricted ? " (el cliente pidió solo estos)" : ""}
+${allowed.map(describeTemplate).join("\n")}
 
 SALIDA
 Respondé solo con JSON: {"concepts":[{"template":"id","tone":"claro|oscuro|acento","idea":"por qué esto le importa al cliente, en una oración","slots":{...},"assetPrompt":"solo si el sistema lo pide","caption":"texto para la publicación, 3 a 5 líneas, con un llamado a escribir y 2 a 4 hashtags"}]}
-- ${CONCEPT_COUNT} conceptos, cada uno con un sistema distinto y una idea distinta.
+- ${CONCEPT_COUNT} conceptos, ${repeat ? `todos con ideas distintas; podés repetir sistema (hasta ${maxPerTemplate(allowed)} veces cada uno)` : "cada uno con un sistema distinto y una idea distinta"}.
 - Como máximo 2 con recurso visual (foto u objeto).
 - Respetá los largos máximos: se miden.`;
 }
@@ -90,28 +107,30 @@ export interface FlyerHistory {
 
 const NO_HISTORY: FlyerHistory = { headlines: [], templates: [] };
 
-function briefPrompt(brief: string, history: FlyerHistory): string {
+function briefPrompt(brief: string, history: FlyerHistory, restricted = false): string {
   const headlines = history.headlines.length
     ? `\n\nYA USADOS POR ESTA MARCA (no los repitas ni los parafrasees)\n${history.headlines.map((item) => `- ${item}`).join("\n")}`
     : "";
-  const templates = history.templates.length
+  const templates = history.templates.length && !restricted
     ? `\n\nEl pedido anterior usó estos sistemas: ${history.templates.join(", ")}. Usá a lo sumo uno de ellos.`
     : "";
   const avoid = headlines + templates;
   return `PEDIDO\n${brief}${avoid}\n\nPensá al menos diez ideas, descartá las previsibles y devolvé las ${CONCEPT_COUNT} mejores.`;
 }
 
-function readConcepts(raw: string): { concepts: FlyerConcept[]; errors: string[] } {
+function readConcepts(raw: string, allowed: readonly FlyerTemplate[] = FLYER_TEMPLATES): { concepts: FlyerConcept[]; errors: string[] } {
   const list = parseJsonObject(raw).concepts;
   const errors: string[] = [];
   const concepts: FlyerConcept[] = [];
-  const used = new Set<string>();
+  const used = new Map<string, number>();
+  const limit = maxPerTemplate(allowed);
   for (const item of Array.isArray(list) ? list : []) {
     const result = validateConcept(item);
     if (!result.ok) errors.push(...result.errors);
-    else if (used.has(result.value.template)) errors.push(`${result.value.template}: sistema repetido.`);
+    else if (!allowed.some((template) => template.id === result.value.template)) errors.push(`${result.value.template}: no está entre los sistemas pedidos.`);
+    else if ((used.get(result.value.template) ?? 0) >= limit) errors.push(`${result.value.template}: sistema repetido.`);
     else {
-      used.add(result.value.template);
+      used.set(result.value.template, (used.get(result.value.template) ?? 0) + 1);
       concepts.push(result.value);
     }
   }
@@ -124,20 +143,27 @@ export async function createConcepts(
   brief: string,
   ask: Ask,
   history: FlyerHistory = NO_HISTORY,
+  only?: readonly string[],
 ): Promise<FlyerConcept[]> {
-  const system = buildDirectorPrompt(brand);
-  const first = readConcepts(await ask(system, briefPrompt(brief, history)));
+  const allowed = allowedTemplates(only);
+  const restricted = allowed.length < FLYER_TEMPLATES.length;
+  const repeat = maxPerTemplate(allowed) > 1;
+  const system = buildDirectorPrompt(brand, only);
+  const first = readConcepts(await ask(system, briefPrompt(brief, history, restricted)), allowed);
   if (first.concepts.length >= CONCEPT_COUNT) return first.concepts;
 
   const used = first.concepts.map((concept) => concept.template);
   const missing = CONCEPT_COUNT - first.concepts.length;
+  const avoid = used.length && !repeat ? `, sin usar estos sistemas: ${used.join(", ")}` : "";
   const second = readConcepts(
     await ask(
       system,
-      `${briefPrompt(brief, history)}\n\nEn tu intento anterior hubo problemas:\n${first.errors.slice(0, 12).map((error) => `- ${error}`).join("\n")}\n\nDevolvé ${missing} conceptos nuevos que los respeten${used.length ? `, sin usar estos sistemas: ${used.join(", ")}` : ""}.`,
+      `${briefPrompt(brief, history, restricted)}\n\nEn tu intento anterior hubo problemas:\n${first.errors.slice(0, 12).map((error) => `- ${error}`).join("\n")}\n\nDevolvé ${missing} conceptos nuevos que los respeten${avoid}.`,
     ),
+    allowed,
   );
-  const concepts = [...first.concepts, ...second.concepts.filter((concept) => !used.includes(concept.template))].slice(0, CONCEPT_COUNT);
+  const extra = repeat ? second.concepts : second.concepts.filter((concept) => !used.includes(concept.template));
+  const concepts = [...first.concepts, ...extra].slice(0, CONCEPT_COUNT);
   if (!concepts.length) throw new Error("La IA no logró proponer conceptos válidos. Probá con otro modelo o un pedido más concreto.");
   return concepts;
 }

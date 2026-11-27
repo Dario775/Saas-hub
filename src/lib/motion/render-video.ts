@@ -7,6 +7,7 @@ import { MOTION_FILES } from "./motion-html";
 const run = promisify(execFile);
 const RENDER_TIMEOUT_MS = 10 * 60_000;
 const FINISH_TIMEOUT_MS = 5 * 60_000;
+const CHECK_TIMEOUT_MS = 2 * 60_000;
 export const MOTION_FPS = 30;
 /** Cuadros intermedios por cuadro final: se mezclan en desenfoque de movimiento. */
 export const MOTION_SUBFRAMES = 5;
@@ -39,6 +40,8 @@ export interface Workspace {
   html: string;
   /** Imagen del diseño (foto u objeto), si la tiene. */
   asset?: { name: string; data: Buffer };
+  /** Otros archivos que usa la composición (por ejemplo, los logos). */
+  files?: Array<{ name: string; data: Buffer }>;
 }
 
 /** Arma la carpeta que HyperFrames convierte en video. */
@@ -48,6 +51,67 @@ export function prepareWorkspace(directory: string, workspace: Workspace): void 
   fs.copyFileSync(gsapFile(), path.join(directory, MOTION_FILES.gsap));
   fs.copyFileSync(choreographyFile(), path.join(directory, MOTION_FILES.choreography));
   if (workspace.asset) fs.writeFileSync(path.join(directory, workspace.asset.name), workspace.asset.data);
+  for (const file of workspace.files ?? []) fs.writeFileSync(path.join(directory, path.basename(file.name)), file.data);
+}
+
+function hyperframesEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, HYPERFRAMES_NO_TELEMETRY: "1", DO_NOT_TRACK: "1" };
+}
+
+function lastLines(text: string, count = 2): string {
+  return text.split(/\r?\n/).slice(-count).join(" ");
+}
+
+function stderrOf(error: unknown): string {
+  return error instanceof Error && "stderr" in error ? String((error as { stderr?: string }).stderr || "").trim() : "";
+}
+
+/**
+ * Abre la composición en Chrome y devuelve los errores de JavaScript o de
+ * archivos faltantes. Vacío: está sana.
+ */
+export async function validateComposition(directory: string): Promise<string[]> {
+  let stdout = "";
+  try {
+    ({ stdout } = await run(process.execPath, [hyperframesBin(), "validate", directory, "--json", "--no-contrast", "--timeout", "15000"], {
+      cwd: motionToolDir(),
+      timeout: CHECK_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      env: hyperframesEnv(),
+    }));
+  } catch (error) {
+    // validate sale con error cuando encuentra problemas: el JSON viene igual.
+    stdout = error instanceof Error && "stdout" in error ? String((error as { stdout?: string }).stdout || "") : "";
+    if (!stdout.trim()) return [`La composición no se pudo abrir. ${lastLines(stderrOf(error))}`.trim()];
+  }
+  const start = stdout.indexOf("{");
+  try {
+    const report = JSON.parse(stdout.slice(start)) as { ok?: boolean; errors?: unknown[] };
+    const errors = (report.errors ?? []).map((item) => (typeof item === "string" ? item : JSON.stringify(item)).slice(0, 400));
+    return report.ok === false && !errors.length ? ["La composición tiene errores que no se pudieron leer."] : errors;
+  } catch {
+    return ["No se pudo leer el resultado del control de la composición."];
+  }
+}
+
+/** Saca cuadros parejos del video y devuelve la hoja (JPEG) con el segundo de cada uno. */
+export async function snapshotSheet(directory: string, output: string, frames = 8): Promise<Buffer> {
+  fs.rmSync(output, { recursive: true, force: true });
+  try {
+    await run(process.execPath, [hyperframesBin(), "snapshot", directory, "--frames", String(frames), "-o", output], {
+      cwd: motionToolDir(),
+      timeout: CHECK_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      env: hyperframesEnv(),
+    });
+  } catch (error) {
+    throw new Error(`No se pudieron sacar cuadros del borrador. ${lastLines(stderrOf(error))}`.trim());
+  }
+  const sheet = path.join(output, "contact-sheet.jpg");
+  if (!fs.existsSync(sheet)) throw new Error("No se generó la hoja de cuadros del borrador.");
+  return fs.readFileSync(sheet);
 }
 
 export interface FinishOptions {

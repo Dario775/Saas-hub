@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { buildMotionHtml, MOTION_BPM, MOTION_HOOK, motionTiming } from "../motion/motion-html";
+import { buildMotionHtml, motionTiming, type MotionTiming } from "../motion/motion-html";
 import { finishVideo, prepareWorkspace, renderVideo } from "../motion/render-video";
 import { buildSoundtrack } from "../motion/sound";
+import { CUSTOM_STYLE, MOTION_STYLES, resolveStyle, type MotionStyle, type MotionStyleChoice } from "../motion/styles";
+import { designFlyerVideo } from "./motion-custom";
 import { flyerContext } from "./context";
 import { prepareLogo } from "./images";
 import { assertSafeId, readFlyerFile, readJobs, updateJob } from "./store";
@@ -23,9 +25,16 @@ export interface MotionEngine {
   prepare: typeof prepareWorkspace;
   render: (directory: string, output: string) => Promise<string>;
   finish: typeof finishVideo;
+  /** Diseño "a medida" con Claude. */
+  custom: typeof designFlyerVideo;
 }
 
-const defaultEngine: MotionEngine = { prepare: prepareWorkspace, render: (directory, output) => renderVideo(directory, output), finish: finishVideo };
+const defaultEngine: MotionEngine = {
+  prepare: prepareWorkspace,
+  render: (directory, output) => renderVideo(directory, output),
+  finish: finishVideo,
+  custom: designFlyerVideo,
+};
 
 const worker = globalThis as typeof globalThis & { saasMotionBusy?: boolean };
 
@@ -94,12 +103,11 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : "No se pudo crear el video.";
 }
 
-/** Ritmo y efectos sobre la grilla de la animación. Con música propia, solo efectos. */
-function writeSoundtrack(directory: string, seed: string, seconds: number, hasTrack: boolean): string {
-  const { duration, outroStart } = motionTiming(seconds);
+/** Música y efectos sobre la grilla de la animación. Con música propia, solo efectos. */
+function writeSoundtrack(directory: string, seed: string, timing: MotionTiming, style: MotionStyle, hasTrack: boolean): string {
   const file = path.join(directory, "sonido.wav");
-  const accents = [MOTION_HOOK.land];
-  fs.writeFileSync(file, buildSoundtrack({ duration, bpm: MOTION_BPM, outroStart, bed: !hasTrack, seed, accents }));
+  const { duration, bpm, outroStart, hook } = timing;
+  fs.writeFileSync(file, buildSoundtrack({ duration, bpm, outroStart, bed: !hasTrack, seed, style, accents: [hook.land] }));
   return file;
 }
 
@@ -109,6 +117,8 @@ interface AnimateRequest {
   brand: FlyerBrand;
   seconds: number;
   music: boolean;
+  /** Estilo pedido; "auto" elige uno distinto en cada armado. */
+  style?: MotionStyleChoice;
 }
 
 async function produceVideo(flyer: Flyer, request: AnimateRequest, engine: MotionEngine): Promise<FlyerVideo> {
@@ -119,22 +129,33 @@ async function produceVideo(flyer: Flyer, request: AnimateRequest, engine: Motio
   cleanUp(directory);
   fs.mkdirSync(directory, { recursive: true });
   try {
-    const track = request.music ? pickTrack(musicDir(), flyer.id) : null;
+    // Cada armado tiene su semilla: rehacer un video da otra música (y otro estilo si es automático).
+    const seed = `${flyer.id}:${Date.now()}`;
+    const style = resolveStyle(request.style ?? "auto", seed);
+    const timing = motionTiming(request.seconds, MOTION_STYLES[style].bpm);
+    const track = request.music ? pickTrack(musicDir(), seed) : null;
     const asset = flyer.hasAsset ? readFlyerFile(flyer.id, "recurso") : null;
     const logo = await prepareLogo(request.brand.logoDataUrl);
     const context = flyerContext(flyer.concept, flyer.format, request.brand, logo, asset ? ASSET_NAME : null);
-    const html = buildMotionHtml(template, context, displayFont(request.brand.headingFont), {
-      duration: request.seconds,
-      cta: CTA,
-    });
-    engine.prepare(composition, { html, asset: asset ? { name: ASSET_NAME, data: asset } : undefined });
+    const font = displayFont(request.brand.headingFont);
+    const assetFile = asset ? { name: ASSET_NAME, data: asset } : null;
+    let concept: string | undefined;
+    if (request.style === CUSTOM_STYLE) {
+      const step = (text: string) => setVideo(request.jobId, flyer.id, { status: "running", seconds: request.seconds, music: request.music, custom: true, step: text });
+      ({ concept } = await engine.custom({ concept: flyer.concept, context, font, cta: CTA, timing, asset: assetFile, directory: composition, prepare: engine.prepare, step }));
+      await step("Grabando el video");
+    } else {
+      const html = buildMotionHtml(template, context, font, { duration: request.seconds, cta: CTA, bpm: timing.bpm });
+      engine.prepare(composition, { html, asset: assetFile ?? undefined });
+    }
     const silent = path.join(directory, "mudo.mp4");
     await engine.render(composition, silent);
-    const soundtrack = request.music ? writeSoundtrack(directory, flyer.id, request.seconds, Boolean(track)) : null;
+    const soundtrack = request.music ? writeSoundtrack(directory, seed, timing, style, Boolean(track)) : null;
     const output = publicVideo(flyer.id);
     fs.mkdirSync(path.dirname(output.file), { recursive: true });
     await engine.finish({ silent, soundtrack, music: track, duration: request.seconds, output: output.file });
-    return { status: "done", seconds: request.seconds, music: request.music, track: Boolean(track), url: output.url };
+    const custom = request.style === CUSTOM_STYLE;
+    return { status: "done", seconds: request.seconds, music: request.music, track: Boolean(track), style, url: output.url, ...(custom ? { custom, concept } : {}) };
   } finally {
     cleanUp(directory);
   }
@@ -150,7 +171,7 @@ export async function animateFlyer(request: AnimateRequest, engine: MotionEngine
   worker.saasMotionBusy = true;
   const previous = flyer.video?.url;
   try {
-    await setVideo(job.id, flyer.id, { status: "running", seconds: request.seconds, music: request.music });
+    await setVideo(job.id, flyer.id, { status: "running", seconds: request.seconds, music: request.music, custom: request.style === CUSTOM_STYLE });
   } catch (error) {
     worker.saasMotionBusy = false;
     throw error;
